@@ -23,8 +23,8 @@ import org.slf4j.LoggerFactory;
 import io.github.easy4j.comfy.cli.ComfyCli;
 import io.github.easy4j.comfy.cli.ComfyCliExecutor;
 import io.github.easy4j.comfy.cli.ComfyCliResult;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 
 /**
  * High-level Java facade that wraps every local {@code comfy} CLI invocation

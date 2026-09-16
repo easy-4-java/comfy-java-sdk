@@ -17,7 +17,7 @@ package io.github.easy4j.comfy.mcp;
 
 import lombok.Data;
 
-import tools.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonNode;
 
 /**
  * One tool advertised by the MCP server via {@code tools/list}.

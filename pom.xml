@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xmlns="http://maven.apache.org/POM/4.1.0"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.1.0 https://maven.apache.org/xsd/maven-4.1.0.xsd">
-    <modelVersion>4.1.0</modelVersion>
+         xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.1.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
     <groupId>io.github.easy4j</groupId>
     <artifactId>comfy-java-sdk</artifactId>
     <name>${project.groupId}:${project.artifactId}</name>
     <url>https://github.com/easy-4-java/${project.artifactId}</url>
     <description>Comfy CLI Java SDK — subprocess integration for comfy-cli and an MCP stdio client for comfy-mcp</description>
-    <version>3.0.x.20260630-SNAPSHOT</version>
+    <version>2.0.x.20260630-SNAPSHOT</version>
     <packaging>jar</packaging>
     <licenses>
         <license>
@@ -35,14 +35,14 @@
     </developers>
     <properties>
         <!-- ═══ 第一段: 基础属性（自然排序）═══ -->
-        <java.version>21</java.version>
+        <java.version>17</java.version>
         <maven.compiler.release>${java.version}</maven.compiler.release>
         <maven.version>4.0.0-rc-5</maven.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Dependency versions -->
         <commons-exec.version>1.6.0</commons-exec.version>
         <jackson.version>3.2.1</jackson.version>
-        <jackson-bom.version>3.2.1</jackson-bom.version>
+        <jackson-bom.version>2.22.1</jackson-bom.version>
         <junit-jupiter.version>6.1.0</junit-jupiter.version>
         <junit.version>5.11.4</junit.version>
         <lombok.version>1.18.46</lombok.version>
@@ -69,7 +69,7 @@
         <dependencies>
             <!-- Jackson BOM -->
             <dependency>
-                <groupId>tools.jackson</groupId>
+                <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
                 <version>${jackson-bom.version}</version>
                 <type>pom</type>
@@ -101,7 +101,7 @@
     </dependencyManagement>
     <dependencies>
         <dependency>
-            <groupId>tools.jackson.core</groupId>
+            <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
         <dependency>
@@ -166,7 +166,7 @@
                                 <rules>
                                     <requireMavenVersion>
                                         <message><![CDATA[You are running an older version of Maven. This application requires at least Maven 4.]]></message>
-                                        <version>[4.0.0,)</version>
+                                        <version>[3.6.3,)</version>
                                     </requireMavenVersion>
                                     <requireJavaVersion>
                                         <message>
