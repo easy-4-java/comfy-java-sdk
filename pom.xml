@@ -8,7 +8,7 @@
     <name>${project.groupId}:${project.artifactId}</name>
     <url>https://github.com/easy-4-java/${project.artifactId}</url>
     <description>Comfy CLI Java SDK — subprocess integration for comfy-cli and an MCP stdio client for comfy-mcp</description>
-    <version>2.0.x.20260630-SNAPSHOT</version>
+    <version>1.0.x.20260630-SNAPSHOT</version>
     <packaging>jar</packaging>
     <licenses>
         <license>
@@ -35,15 +35,15 @@
     </developers>
     <properties>
         <!-- ═══ 第一段: 基础属性（自然排序）═══ -->
-        <java.version>17</java.version>
+        <java.version>1.8</java.version>
         <maven.compiler.release>${java.version}</maven.compiler.release>
         <maven.version>4.0.0-rc-5</maven.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Dependency versions -->
         <commons-exec.version>1.6.0</commons-exec.version>
         <jackson.version>3.2.1</jackson.version>
-        <jackson-bom.version>2.22.1</jackson-bom.version>
-        <junit-jupiter.version>6.1.0</junit-jupiter.version>
+        <jackson-bom.version>2.18.9</jackson-bom.version>
+        <junit-jupiter.version>5.11.4</junit-jupiter.version>
         <junit.version>5.11.4</junit.version>
         <lombok.version>1.18.46</lombok.version>
         <slf4j.version>2.0.18</slf4j.version>
