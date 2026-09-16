@@ -180,8 +180,8 @@ public class ComfyCliExecutor {
         long startNanos = System.nanoTime();
         try {
             int exitCode = childEnv == null ? executor.execute(cmd) : executor.execute(cmd, childEnv);
-            String out = stdout.toString().trim();
-            String err = stderr.toString().trim();
+            String out = stdout.toString(StandardCharsets.UTF_8).trim();
+            String err = stderr.toString(StandardCharsets.UTF_8).trim();
             log.debug("comfy CLI executed: exitCode={}, stdout.len={}", exitCode, out.length());
             if (watchdog.killedProcess()) {
                 return new ComfyCliResult(-1, out, "comfy CLI timed out after " + timeoutMs + " ms\n" + err);
@@ -194,8 +194,8 @@ public class ComfyCliExecutor {
             // with the real exit code instead of discarding the output. The
             // deadline check makes the timeout verdict race-free even when
             // {@code watchdog.killedProcess()} has not observed the kill yet.
-            String out = stdout.toString().trim();
-            String err = stderr.toString().trim();
+            String out = stdout.toString(StandardCharsets.UTF_8).trim();
+            String err = stderr.toString(StandardCharsets.UTF_8).trim();
             boolean timedOut = watchdog.killedProcess()
                     || System.nanoTime() - startNanos >= timeoutMs * 1_000_000L;
             if (timedOut) {
