@@ -141,6 +141,20 @@ public class ComfyCliExecutor {
         }
     }
 
+    /**
+     * Decodes child-process output as UTF-8. {@code toString(Charset)} is a
+     * Java 10+ API, so the JDK 8 line goes through {@code toString("UTF-8")};
+     * UTF-8 support is guaranteed on every JVM, which makes the catch branch
+     * unreachable — it exists purely to satisfy the checked exception.
+     */
+    private static String decodeUtf8(ByteArrayOutputStream buffer) {
+        try {
+            return buffer.toString("UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
+        }
+    }
+
     private ComfyCliResult runProcess(String stdin, String... args) {
         CommandLine cmd = CommandLine.parse(config.getLocalExecutable());
         for (String arg : args) {
@@ -180,8 +194,8 @@ public class ComfyCliExecutor {
         long startNanos = System.nanoTime();
         try {
             int exitCode = childEnv == null ? executor.execute(cmd) : executor.execute(cmd, childEnv);
-            String out = stdout.toString().trim();
-            String err = stderr.toString().trim();
+            String out = decodeUtf8(stdout).trim();
+            String err = decodeUtf8(stderr).trim();
             log.debug("comfy CLI executed: exitCode={}, stdout.len={}", exitCode, out.length());
             if (watchdog.killedProcess()) {
                 return new ComfyCliResult(-1, out, "comfy CLI timed out after " + timeoutMs + " ms\n" + err);
@@ -194,8 +208,8 @@ public class ComfyCliExecutor {
             // with the real exit code instead of discarding the output. The
             // deadline check makes the timeout verdict race-free even when
             // {@code watchdog.killedProcess()} has not observed the kill yet.
-            String out = stdout.toString().trim();
-            String err = stderr.toString().trim();
+            String out = decodeUtf8(stdout).trim();
+            String err = decodeUtf8(stderr).trim();
             boolean timedOut = watchdog.killedProcess()
                     || System.nanoTime() - startNanos >= timeoutMs * 1_000_000L;
             if (timedOut) {
