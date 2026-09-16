@@ -89,6 +89,20 @@ class ComfyCliExecutorTest {
     }
 
     @Test
+    void shouldDecodeUtf8OutputRegardlessOfPlatformCharset() {
+        // POSIX printf octal escapes emit 你好 as raw UTF-8 bytes; with a
+        // platform-default-charset decode this corrupts on C-locale JVMs.
+        // NOTE: the backslashes are doubled in Java source so the shell
+        // receives single ones — an octal escape like \344 must be written
+        // \\344 here or the compiler eats it at compile time.
+        ComfyCliExecutor executor = new ComfyCliExecutor(configFor("/bin/sh"));
+
+        ComfyCliResult result = executor.execute("-c", "printf '\\344\\275\\240\\345\\245\\275'");
+
+        assertEquals("你好", result.getStdout());
+    }
+
+    @Test
     void shouldIgnoreNullArguments() {
         ComfyCliExecutor executor = new ComfyCliExecutor(configFor(ECHO));
 
