@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import io.github.easy4j.comfy.cli.ComfyCli;
+import com.fasterxml.jackson.databind.JsonNode;
 import io.github.easy4j.comfy.cli.ComfyCliExecutor;
 
 /**
@@ -77,18 +78,14 @@ class ComfyClientTest {
     }
 
     @Test
-    void shouldParseGenerateJsonOutput() {
-        // /bin/sh built-ins let us emit a real JSON document for --json runs.
+    void shouldParseGenerateJsonOutput() throws Exception {
         ComfyClientConfig config = echoConfig();
-        config.setLocalExecutable("/bin/sh");
+        config.setLocalExecutable(
+                java.nio.file.Paths.get("src", "test", "resources", "comfy-json.sh").toAbsolutePath().toString());
         try (ComfyClient client = new ComfyClient(config)) {
-            ComfyCli.GenerateOptions options = new ComfyCli.GenerateOptions()
-                    .prompt("x").json(true)
-                    .download("/nonexistent-dir-xyz/out.png");
-            // echo 不可用，改为直接断言失败路径之外的成功解析：
-            // 用 sh 打印固定 JSON 并跳过 generateJson（其内部先执行后解析），
-            // 这里以 mapper 直测——保持端到端语义由 MCP/CLI 契约测试覆盖。
-            assertTrue(client.version().getExitCode() == 0);
+            JsonNode json = client.generateJson("flux-pro",
+                    new ComfyCli.GenerateOptions().prompt("hi").json(true));
+            assertEquals("https://example/asset.png", json.path("data").get(0).path("url").asText());
         }
     }
 
