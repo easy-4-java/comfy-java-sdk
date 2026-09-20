@@ -42,7 +42,7 @@
         <!-- Dependency versions -->
         <commons-exec.version>1.6.0</commons-exec.version>
         <jackson.version>3.2.1</jackson.version>
-        <jackson-bom.version>2.22.1</jackson-bom.version>
+        <jackson-bom.version>2.22.2</jackson-bom.version>
         <junit-jupiter.version>6.1.0</junit-jupiter.version>
         <junit.version>5.11.4</junit.version>
         <lombok.version>1.18.46</lombok.version>

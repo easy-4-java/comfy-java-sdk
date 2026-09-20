@@ -1,17 +1,9 @@
-# CI workflow for the feature/3.0.x line (JDK 21)
-#
-# Triggers:
-#   - push / pull_request on the feature/3.0.x branch
-#   - manual workflow_dispatch
-#
-# Runs `./mvnw -B clean verify` (Maven 4 via the checked-in wrapper — the
-# runner's bundled Maven 3 cannot parse the POM 4.1.0 model) which includes
-# the JaCoCo coverage gate (90% line coverage, haltOnFailure=false).
+# CI for the Java 17 / Jackson 2 line.
 name: CI
 
 on:
   push:
-    branches: [feature/2.0.x]
+    branches: [feature/2.0.x, hardening/2.0.x]
   pull_request:
     branches: [feature/2.0.x]
   workflow_dispatch:
@@ -27,17 +19,14 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
-
-      - name: Set up JDK 21
+      - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: maven
-
-      - name: Build and verify with JaCoCo coverage gate
+      - name: Build and verify
         run: mvn -B --no-transfer-progress clean verify
-
       - name: Upload JaCoCo coverage report
         if: always()
         uses: actions/upload-artifact@v7
@@ -45,7 +34,6 @@ jobs:
           name: jacoco-coverage
           path: target/site/jacoco
           retention-days: 14
-
       - name: Upload surefire reports
         if: always()
         uses: actions/upload-artifact@v7
