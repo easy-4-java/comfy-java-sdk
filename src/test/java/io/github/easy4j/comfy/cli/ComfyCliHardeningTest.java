@@ -31,7 +31,24 @@ class ComfyCliHardeningTest {
         long started = System.nanoTime();
         assertFalse(executor.probe());
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-        assertTrue(elapsedMs < 5000, "probe must not wait for the normal command timeout");
+        assertTrue(elapsedMs < 3000, "probe must honor probe + stream-drain deadlines");
+    }
+
+    @Test
+    void timeoutMustNotWaitForDescendantPipeEof() {
+        ComfyClientConfig config = new ComfyClientConfig();
+        config.setLocalExecutable("/bin/sh");
+        config.setLocalTimeoutSeconds(1);
+        config.setStreamDrainTimeoutMillis(1_000);
+        ComfyCliExecutor executor = new ComfyCliExecutor(config);
+
+        long started = System.nanoTime();
+        ComfyCliResult result = executor.execute("-c", "sleep 30");
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        assertTrue(result.isTimeout());
+        assertTrue(elapsedMs < 4000,
+                "timeout must not block until a descendant closes inherited stdout/stderr");
     }
 
     @Test

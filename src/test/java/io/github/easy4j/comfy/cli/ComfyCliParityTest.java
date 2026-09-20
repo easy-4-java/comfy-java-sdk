@@ -48,6 +48,13 @@ class ComfyCliParityTest {
         assertTrue(cli.modelsSearch("sdxl base").getStdout().contains("model search --text sdxl base"));
         assertTrue(cli.upload("a.png", "b.png").getStdout().contains("upload a.png b.png"));
         assertTrue(cli.download("p1", "out", true).getStdout().contains("download p1 -o out --url-only"));
+        assertTrue(cli.skillsInstall("--scope", "project", "--dry-run").getStdout()
+                .contains("skills install --scope project --dry-run"));
+        assertTrue(cli.skillsUninstall("--scope", "project").getStdout()
+                .contains("skills uninstall --scope project"));
+        assertTrue(cli.skillsShow("comfy-debug").getStdout().contains("skills show comfy-debug"));
+        assertTrue(cli.skillsStatus("user").getStdout().contains("skills status --scope user"));
+        assertTrue(cli.skillsValidate("./my-skill").getStdout().contains("skills validate ./my-skill"));
     }
 
     @Test
@@ -74,6 +81,8 @@ class ComfyCliParityTest {
                 () -> new ComfyCli.GenerateOptions().where("edge"));
         assertThrows(IllegalArgumentException.class,
                 () -> new ComfyCli.GenerateOptions().param("--json", "x"));
+        assertThrows(IllegalArgumentException.class,
+                () -> cli().skillsStatus("workspace"));
     }
 
     @Test

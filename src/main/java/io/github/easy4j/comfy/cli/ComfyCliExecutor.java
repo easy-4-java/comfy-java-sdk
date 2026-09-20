@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -84,7 +85,9 @@ public class ComfyCliExecutor {
         CappedOutputStream stdout = new CappedOutputStream(config.getMaxStdoutBytes());
         CappedOutputStream stderr = new CappedOutputStream(config.getMaxStderrBytes());
         byte[] stdinBytes = stdin == null ? new byte[0] : stdin.getBytes(StandardCharsets.UTF_8);
-        executor.setStreamHandler(new PumpStreamHandler(stdout, stderr, new ByteArrayInputStream(stdinBytes)));
+        PumpStreamHandler streamHandler = new PumpStreamHandler(stdout, stderr, new ByteArrayInputStream(stdinBytes));
+        streamHandler.setStopTimeout(Duration.ofMillis(config.getStreamDrainTimeoutMillis()));
+        executor.setStreamHandler(streamHandler);
 
         ExecuteWatchdog watchdog = new ExecuteWatchdog(timeoutMs);
         executor.setWatchdog(watchdog);
@@ -110,8 +113,15 @@ public class ComfyCliExecutor {
             }
             return new ComfyCliResult(e.getExitValue(), out, err, stdout.isTruncated(), stderr.isTruncated());
         } catch (IOException e) {
+            String out = decodeUtf8(stdout).trim();
+            String err = decodeUtf8(stderr).trim();
+            boolean timedOut = watchdog.killedProcess()
+                    || System.nanoTime() - startNanos >= timeoutMs * 1_000_000L;
+            if (timedOut) {
+                return timeoutResult(timeoutMs, out, err, stdout, stderr);
+            }
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            return new ComfyCliResult(-1, "", message, false, false);
+            return new ComfyCliResult(-1, out, message, stdout.isTruncated(), stderr.isTruncated());
         }
     }
 

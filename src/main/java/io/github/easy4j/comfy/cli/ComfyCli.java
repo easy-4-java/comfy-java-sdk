@@ -221,9 +221,22 @@ public class ComfyCli {
         return executor.execute(args.toArray(new String[0]));
     }
 
+    /** Raw skills family escape hatch. */
+    public ComfyCliResult skills(String... args) { return prefixed("skills", args); }
     public ComfyCliResult skillsInstall() { return executor.execute("skills", "install"); }
+    public ComfyCliResult skillsInstall(String... args) { return prefixed2("skills", "install", args); }
+    public ComfyCliResult skillsUninstall(String... args) { return prefixed2("skills", "uninstall", args); }
     public ComfyCliResult skillsList() { return executor.execute("skills", "list"); }
+    public ComfyCliResult skillsShow(String name) {
+        return executor.execute("skills", "show", requireNonBlank("name", name));
+    }
     public ComfyCliResult skillsStatus() { return executor.execute("skills", "status"); }
+    public ComfyCliResult skillsStatus(String scope) {
+        return executor.execute("skills", "status", "--scope", requireSkillScope(scope));
+    }
+    public ComfyCliResult skillsValidate(String path) {
+        return executor.execute("skills", "validate", requireNonBlank("path", path));
+    }
 
     public ComfyCliResult execute(String... args) { return executor.execute(args); }
 
@@ -262,6 +275,13 @@ public class ComfyCli {
             throw new IllegalArgumentException("where must be 'local' or 'cloud': " + where);
         }
         return where;
+    }
+
+    private static String requireSkillScope(String scope) {
+        if (!"user".equals(scope) && !"project".equals(scope)) {
+            throw new IllegalArgumentException("scope must be 'user' or 'project': " + scope);
+        }
+        return scope;
     }
 
     private static String requireNonBlank(String name, String value) {
