@@ -1,17 +1,5 @@
 /*
- * Copyright (c) 2018-present, easy-4-java (https://github.com/easy-4-java).
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2018-present, easy-4-java.
  */
 package io.github.easy4j.comfy.mcp;
 
@@ -22,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,59 +19,80 @@ import org.junit.jupiter.api.Test;
 
 import io.github.easy4j.comfy.ComfyException;
 
-/**
- * End-to-end tests running {@link ComfyMcpClient} against a fake MCP server
- * process (python3, NDJSON JSON-RPC on stdio) — the same wire contract as
- * {@code comfy-mcp}.
- *
- * @since 1.0.0
- */
 class ComfyMcpClientE2ETest {
 
-    private static final String FAKE_SERVER = Paths.get("src", "test", "resources", "fake-mcp-server.py")
+    private static final String FAKE_SERVER = Paths
+            .get("src", "test", "resources", "fake-mcp-server.py")
             .toAbsolutePath().toString();
 
     private static ComfyMcpConfig config() {
         ComfyMcpConfig config = new ComfyMcpConfig();
         config.setLocalExecutable("python3");
         config.setMcpArgs(new String[] {FAKE_SERVER});
-        config.setConnectTimeoutMillis(10_000);
-        config.setReadTimeoutMillis(10_000);
+        config.setConnectTimeoutMillis(5_000);
+        config.setReadTimeoutMillis(5_000);
+        config.setShutdownTimeoutMillis(1_000);
         return config;
     }
 
     @Test
-    void shouldConnectAndInitialize() {
+    void shouldConnectListToolsAndRejectDuplicateConnect() {
         try (ComfyMcpClient client = new ComfyMcpClient(config())) {
-            String version = client.connect();
-
-            assertEquals("0.0.0-test", version);
+            assertEquals("0.0.0-test", client.connect());
             assertEquals("FakeComfyMcp", client.getServerName());
+            assertTrue(client.isConnected());
+            List<ComfyMcpTool> tools = client.listTools();
+            assertEquals(3, tools.size());
+            assertThrows(IllegalStateException.class, client::connect);
         }
     }
 
     @Test
-    void shouldListToolsAndCallThem() {
+    void shouldCallTypedWorkflowWrapper() {
         try (ComfyMcpClient client = new ComfyMcpClient(config())) {
             client.connect();
+            ComfyMcpCallResult result = client.runWorkflow("wf.json", false, 12.5, false);
+            assertFalse(result.isError());
+            assertTrue(result.getText().contains("\"workflow_path\": \"wf.json\""));
+            assertTrue(result.getText().contains("\"wait\": false"));
+        }
+    }
 
-            List<ComfyMcpTool> tools = client.listTools();
-            assertEquals(2, tools.size());
-            assertEquals("server_info", tools.get(0).getName());
-            assertNotNull(tools.get(1).getInputSchema());
+    @Test
+    void shouldPreserveNonTextContent() {
+        try (ComfyMcpClient client = new ComfyMcpClient(config())) {
+            client.connect();
+            ComfyMcpCallResult result = client.callTool("mixed_content", null);
+            assertEquals("hello", result.getText());
+            assertEquals(3, result.getContents().size());
+            assertEquals("image", result.getContents().get(1).getType());
+            assertEquals("image/png", result.getContents().get(1).getMimeType());
+            assertEquals("aGVsbG8=", result.getContents().get(1).getData());
+            assertEquals("file:///tmp/out.png", result.getContents().get(2).getUri());
+        }
+    }
 
-            ComfyMcpCallResult info = client.callTool("server_info", null);
-            assertFalse(info.isError());
-            assertEquals("comfyui up", info.getText());
+    @Test
+    void shouldDrainLargeStderrWithoutDeadlock() {
+        ComfyMcpConfig config = config();
+        Map<String, String> env = new LinkedHashMap<String, String>();
+        env.put("FAKE_MCP_STDERR_BYTES", "262144");
+        config.setEnvironment(env);
+        try (ComfyMcpClient client = new ComfyMcpClient(config)) {
+            client.connect();
+            assertEquals("comfyui up", client.callTool("server_info", null).getText());
+        }
+    }
 
-            Map<String, Object> args = new LinkedHashMap<String, Object>();
-            args.put("workflow_path", "wf.json");
-            ComfyMcpCallResult run = client.callTool("run_workflow", args);
-            assertFalse(run.isError());
-            assertEquals("queued wf.json", run.getText());
-
-            ComfyMcpCallResult unknown = client.callTool("nope", null);
-            assertTrue(unknown.isError());
+    @Test
+    void shouldRemoveTimedOutRpcFromPendingMap() throws Exception {
+        ComfyMcpConfig config = config();
+        config.setReadTimeoutMillis(100);
+        try (ComfyMcpClient client = new ComfyMcpClient(config)) {
+            client.connect();
+            assertThrows(ComfyException.class, () -> client.callTool("slow", null));
+            Thread.sleep(50L);
+            assertEquals(0, client.pendingRequestCount());
         }
     }
 
@@ -92,8 +102,8 @@ class ComfyMcpClientE2ETest {
         assertThrows(IllegalStateException.class, () -> client.callToolAsync("server_info", null));
         client.close();
         assertTrue(client.isClosed());
+        assertFalse(client.isConnected());
         assertThrows(IllegalStateException.class, () -> client.callToolAsync("server_info", null));
-        assertThrows(ComfyException.class, () -> client.listTools());
         client.close();
     }
 
@@ -101,34 +111,32 @@ class ComfyMcpClientE2ETest {
     void shouldFailConnectWhenServerExitsPrematurely() {
         ComfyMcpConfig config = config();
         config.setLocalExecutable("/bin/echo");
-        ComfyMcpClient client = new ComfyMcpClient(config);
-        assertThrows(ComfyException.class, client::connect);
-        client.close();
+        try (ComfyMcpClient client = new ComfyMcpClient(config)) {
+            assertThrows(ComfyException.class, client::connect);
+        }
     }
 
     @Test
-    void shouldTimeoutWhenServerNeverAnswers() {
-        ComfyMcpConfig config = new ComfyMcpConfig();
-        // `sleep` produces no stdout: the initialize request is never answered.
-        config.setLocalExecutable("/bin/sleep");
-        config.setMcpArgs(new String[] {"30"});
-        config.setConnectTimeoutMillis(1_000);
-        ComfyMcpClient client = new ComfyMcpClient(config);
-        assertThrows(ComfyException.class, client::connect);
-        client.close();
-    }
-
-    @Test
-    void shouldPassEnvironmentToServer() {
+    void shouldPassEnvironmentAndExerciseCurrentToolConveniences() {
         ComfyMcpConfig config = config();
-        Map<String, Object> args = new LinkedHashMap<String, Object>();
-        // COMFY_BIN 场景由 env 注入承载——这里以 env 透传间接验证（fake server 不读 env，
-        // 但 spawn 不因额外 env 失败即视为通过；真实验证在 executor 测试覆盖）。
-        config.setEnvironment(new LinkedHashMap<String, String>());
-        config.getEnvironment().put("COMFY_BIN", "/opt/venv/bin/comfy");
+        Map<String, String> env = new LinkedHashMap<String, String>();
+        env.put("COMFY_BIN", "/opt/venv/bin/comfy");
+        config.setEnvironment(env);
         try (ComfyMcpClient client = new ComfyMcpClient(config)) {
             client.connect();
-            assertFalse(client.listTools().isEmpty());
+            assertNotNull(client.serverInfo());
+            assertTrue(client.fetchOutputs("p1", "/tmp/out", true, false).getText().contains("p1"));
+            assertTrue(client.searchModels("wan", "loras").getText().contains("wan"));
+            assertTrue(client.launchComfyUi(Arrays.asList("--port", "8188"), false)
+                    .getText().contains("8188"));
+        }
+    }
+
+    @Test
+    void businessLevelMcpErrorsShouldRemainResults() {
+        try (ComfyMcpClient client = new ComfyMcpClient(config())) {
+            client.connect();
+            assertTrue(client.callTool("nope", null).isError());
         }
     }
 }

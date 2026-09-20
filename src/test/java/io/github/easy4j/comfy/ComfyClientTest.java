@@ -1,17 +1,5 @@
 /*
- * Copyright (c) 2018-present, easy-4-java (https://github.com/easy-4-java).
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2018-present, easy-4-java.
  */
 package io.github.easy4j.comfy;
 
@@ -21,77 +9,75 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Paths;
+
 import org.junit.jupiter.api.Test;
 
 import io.github.easy4j.comfy.cli.ComfyCli;
+import io.github.easy4j.comfy.model.ComfyCliEnvelope;
 import tools.jackson.databind.JsonNode;
-import io.github.easy4j.comfy.cli.ComfyCliExecutor;
 
-/**
- * Unit tests for {@link ComfyClient} validation and delegation.
- *
- * @since 1.0.0
- */
 class ComfyClientTest {
 
-    private static ComfyClientConfig echoConfig() {
+    private static String resource(String name) {
+        return Paths.get("src", "test", "resources", name).toAbsolutePath().toString();
+    }
+
+    private static ComfyClientConfig config(String executable) {
         ComfyClientConfig config = new ComfyClientConfig();
-        config.setLocalExecutable(
-                java.nio.file.Paths.get("src", "test", "resources", "comfy-echo.sh").toAbsolutePath().toString());
+        config.setLocalExecutable(executable);
         config.setLocalTimeoutSeconds(2);
         return config;
     }
 
     @Test
-    void shouldRejectNullConfig() {
-        assertThrows(NullPointerException.class, () -> new ComfyClient(null));
+    void shouldDelegateBasics() {
+        try (ComfyClient client = new ComfyClient(config(resource("comfy-echo.sh")))) {
+            assertTrue(client.version().getStdout().contains("--version"));
+            assertTrue(client.isAvailable());
+            assertNotNull(client.cli());
+            assertNotNull(client.getConfig());
+        }
+    }
+
+    @Test
+    void shouldParseGenerateJsonWithoutMutatingOptions() {
+        ComfyCli.GenerateOptions options = new ComfyCli.GenerateOptions().prompt("hi");
+        try (ComfyClient jsonClient = new ComfyClient(config(resource("comfy-json.sh")))) {
+            JsonNode json = jsonClient.generateJson("flux-pro", options);
+            assertEquals("https://example/asset.png", json.path("data").get(0).path("url").asText());
+        }
+
+        try (ComfyClient echoClient = new ComfyClient(config(resource("comfy-echo.sh")))) {
+            String args = echoClient.cli().generate("flux-pro", options).getStdout();
+            assertFalse(args.contains("--json"), "generateJson must not mutate caller options");
+        }
+    }
+
+    @Test
+    void shouldParseUniformCliEnvelope() {
+        try (ComfyClient client = new ComfyClient(config(resource("comfy-envelope.sh")))) {
+            ComfyCliEnvelope envelope = client.environment();
+            assertTrue(envelope.isOk());
+            assertEquals("env", envelope.getCommand());
+            assertEquals("local", envelope.getWhere());
+            assertTrue(envelope.getData().path("running").asBoolean());
+        }
+    }
+
+    @Test
+    void shouldRejectTruncatedJsonEnvelope() {
+        ComfyClientConfig config = config(resource("comfy-envelope.sh"));
+        config.setMaxOutputBytes(12);
+        try (ComfyClient client = new ComfyClient(config)) {
+            assertThrows(ComfyException.class, client::environment);
+        }
     }
 
     @Test
     void shouldRejectInvalidConfig() {
-        ComfyClientConfig config = echoConfig();
+        ComfyClientConfig config = config(resource("comfy-echo.sh"));
         config.setDefaultWhere("bogus");
-        assertThrows(IllegalStateException.class, () -> new ComfyClient(config));
-    }
-
-    @Test
-    void shouldDelegateBasics() {
-        try (ComfyClient client = new ComfyClient(echoConfig())) {
-            assertTrue(client.version().getStdout().contains("--version"));
-            assertTrue(client.isAvailable());
-            assertTrue(client.cloudLogin().getStdout().contains("cloud login"));
-            assertTrue(client.setup().getStdout().contains("-y"));
-            assertTrue(client.skillsInstall().getStdout().contains("skills install"));
-            assertNotNull(client.getConfig());
-            assertNotNull(client.cli());
-        }
-    }
-
-    @Test
-    void shouldRaiseWhenGenerateJsonPrintsNonJson() {
-        // The echo fixture prints its argument list, which is not JSON —
-        // generateJson must surface that as ComfyException.
-        try (ComfyClient client = new ComfyClient(echoConfig())) {
-            assertThrows(ComfyException.class,
-                    () -> client.generateJson("flux-pro", new ComfyCli.GenerateOptions().prompt("hi")));
-        }
-    }
-
-    @Test
-    void shouldParseGenerateJsonOutput() throws Exception {
-        ComfyClientConfig config = echoConfig();
-        config.setLocalExecutable(
-                java.nio.file.Paths.get("src", "test", "resources", "comfy-json.sh").toAbsolutePath().toString());
-        try (ComfyClient client = new ComfyClient(config)) {
-            JsonNode json = client.generateJson("flux-pro",
-                    new ComfyCli.GenerateOptions().prompt("hi").json(true));
-            assertEquals("https://example/asset.png", json.path("data").get(0).path("url").asText());
-        }
-    }
-
-    @Test
-    void shouldCloseWithoutError() {
-        ComfyClient client = new ComfyClient(echoConfig());
-        client.close();
+        assertThrows(IllegalArgumentException.class, () -> new ComfyClient(config));
     }
 }

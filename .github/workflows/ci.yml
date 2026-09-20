@@ -1,17 +1,9 @@
-# CI workflow for the feature/3.0.x line (JDK 21)
-#
-# Triggers:
-#   - push / pull_request on the feature/3.0.x branch
-#   - manual workflow_dispatch
-#
-# Runs `./mvnw -B clean verify` (Maven 4 via the checked-in wrapper — the
-# runner's bundled Maven 3 cannot parse the POM 4.1.0 model) which includes
-# the JaCoCo coverage gate (90% line coverage, haltOnFailure=false).
+# CI for the Java 21 / Jackson 3 line.
 name: CI
 
 on:
   push:
-    branches: [feature/3.0.x]
+    branches: [feature/3.0.x, hardening/3.0.x]
   pull_request:
     branches: [feature/3.0.x]
   workflow_dispatch:
@@ -35,7 +27,7 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Build and verify with JaCoCo coverage gate
+      - name: Build and verify
         run: ./mvnw -B --no-transfer-progress clean verify
 
       - name: Upload JaCoCo coverage report
