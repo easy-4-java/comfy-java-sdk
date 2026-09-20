@@ -2,186 +2,173 @@
  * Copyright (c) 2018-present, easy-4-java (https://github.com/easy-4-java).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 package io.github.easy4j.comfy;
 
 import java.util.Objects;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 
 import io.github.easy4j.comfy.cli.ComfyCli;
 import io.github.easy4j.comfy.cli.ComfyCliExecutor;
 import io.github.easy4j.comfy.cli.ComfyCliResult;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import io.github.easy4j.comfy.model.ComfyDoctorReport;
+import io.github.easy4j.comfy.model.ComfyJsonEnvelope;
 
 /**
- * High-level Java facade that wraps every local {@code comfy} CLI invocation
- * behind ergonomic, strongly-typed methods.
+ * High-level facade over the local first-party {@code comfy} CLI.
  *
- * <p>This class is the recommended entry point for the CLI route. It owns a
- * single {@link ComfyClientConfig} and a single {@link ComfyCli}, forwarding
- * the configured defaults to every call. For the MCP route (spawn
- * {@code comfy-mcp} and speak JSON-RPC over stdio) use
+ * <p>Advanced and newly-added CLI commands remain reachable through
+ * {@link #cli()} and its raw execute escape hatch. Local MCP is exposed by
  * {@code io.github.easy4j.comfy.mcp.ComfyMcpClient}.</p>
- *
- * @author <a href="https://github.com/loong10k">Loong Wan</a>
- * @since 1.0.0
- * @see ComfyClientConfig
- * @see ComfyCli
  */
 public class ComfyClient implements AutoCloseable {
 
-    private static final Logger log = LoggerFactory.getLogger(ComfyClient.class);
     private static final JsonMapper MAPPER = new JsonMapper();
 
     private final ComfyClientConfig config;
     private final ComfyCli cli;
 
-    /**
-     * Creates a new client backed by the given configuration. A default
-     * {@link ComfyCli} and {@link ComfyCliExecutor} are constructed
-     * automatically.
-     *
-     * @param config runtime configuration; must not be {@code null}.
-     * @throws NullPointerException if {@code config} is {@code null}.
-     */
     public ComfyClient(ComfyClientConfig config) {
         this.config = Objects.requireNonNull(config, "config");
         this.config.validate();
         this.cli = new ComfyCli(this.config, new ComfyCliExecutor(this.config));
     }
 
-    /**
-     * Creates a new client that delegates to the supplied {@link ComfyCli}.
-     *
-     * <p>This constructor exists primarily for testing &mdash; it lets a
-     * caller substitute a {@link ComfyCli} backed by a mocked executor while
-     * still using the default behaviour of the surrounding facade.</p>
-     *
-     * @param config runtime configuration; must not be {@code null}.
-     * @param cli    the CLI facade to delegate to; must not be {@code null}.
-     * @throws NullPointerException if either argument is {@code null}.
-     */
     public ComfyClient(ComfyClientConfig config, ComfyCli cli) {
         this.config = Objects.requireNonNull(config, "config");
+        this.config.validate();
         this.cli = Objects.requireNonNull(cli, "cli");
     }
 
-    /**
-     * Runs {@code comfy --version}.
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult version() {
-        return cli.version();
-    }
+    public ComfyCliResult version() { return cli.version(); }
+    public ComfyCliResult help() { return cli.help(); }
+    public boolean isAvailable() { return cli.executor().probe(); }
 
     /**
-     * Runs {@code comfy --help}.
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult help() {
-        return cli.help();
-    }
-
-    /**
-     * Probes CLI availability with {@code comfy --version} and the configured
-     * probe timeout.
-     *
-     * @return {@code true} when the local CLI is reachable.
-     */
-    public boolean isAvailable() {
-        return cli.executor().probe();
-    }
-
-    /**
-     * Sends a generation request ({@code comfy generate <model>}) with
-     * {@code --json} so the standard output can be parsed as JSON.
-     *
-     * @param model   the generation model alias.
-     * @param options the generation options; must not be {@code null}.
-     * @return the parsed JSON root of the {@code --json} output; never
-     *         {@code null}.
-     * @throws ComfyException when the invocation fails or prints non-JSON.
+     * Runs generate with machine-readable output without mutating caller-owned
+     * options.
      */
     public JsonNode generateJson(String model, ComfyCli.GenerateOptions options) {
-        ComfyCli.GenerateOptions jsonOptions = options.json(true);
+        Objects.requireNonNull(options, "options");
+        ComfyCli.GenerateOptions jsonOptions = new ComfyCli.GenerateOptions(options).json(true);
         ComfyCliResult result = cli.generate(model, jsonOptions);
         if (!result.isSuccess()) {
             throw new ComfyException("comfy generate failed: exit=" + result.getExitCode()
                     + " stderr=" + result.getStderr());
         }
+        return parseJson(result.getStdout(), "comfy generate --json");
+    }
+
+    /** Runs the CLI's self-describing discovery contract. */
+    public ComfyJsonEnvelope discover() {
+        return requireSuccessfulEnvelope(cli.discoverJson(), "comfy --json discover");
+    }
+
+    /** Runs {@code comfy --json which}. */
+    public ComfyJsonEnvelope which() {
+        return requireSuccessfulEnvelope(cli.whichJson(), "comfy --json which");
+    }
+
+    /** Runs {@code comfy --json env}. */
+    public ComfyJsonEnvelope environment() {
+        return requireSuccessfulEnvelope(cli.envJson(), "comfy --json env");
+    }
+
+    /**
+     * Performs a bounded readiness check using only local CLI calls. No
+     * environment values or credentials are copied into the report.
+     */
+    public ComfyDoctorReport doctor() {
+        boolean available = isAvailable();
+        ComfyCliResult versionResult = available ? cli.version() : new ComfyCliResult(-1, "", "comfy unavailable");
+        boolean versionHealthy = versionResult.isSuccess() && !versionResult.getStdout().trim().isEmpty();
+        String version = versionHealthy ? versionResult.getStdout().trim() : null;
+
+        ComfyJsonEnvelope which = null;
+        ComfyJsonEnvelope env = null;
+        ComfyJsonEnvelope discovery = null;
+        if (available) {
+            try { which = requireSuccessfulEnvelope(cli.whichJson(), "comfy --json which"); }
+            catch (RuntimeException ignored) { }
+            try { env = requireSuccessfulEnvelope(cli.envJson(), "comfy --json env"); }
+            catch (RuntimeException ignored) { }
+            try { discovery = requireSuccessfulEnvelope(cli.discoverJson(), "comfy --json discover"); }
+            catch (RuntimeException ignored) { }
+        }
+
+        String workspace = null;
+        boolean workspaceResolved = false;
+        if (which != null && which.getData() != null) {
+            JsonNode path = which.getData().path("workspace_path");
+            if (!path.isMissingNode() && !path.isNull() && !path.asText().trim().isEmpty()) {
+                workspace = path.asText();
+                workspaceResolved = true;
+            }
+        }
+
+        boolean environmentHealthy = env != null && env.isOk();
+        boolean discoveryHealthy = discovery != null && discovery.isOk();
+        String summary = "cli=" + available
+                + ", version=" + versionHealthy
+                + ", workspace=" + workspaceResolved
+                + ", env=" + environmentHealthy
+                + ", discover=" + discoveryHealthy;
+        return new ComfyDoctorReport(available, versionHealthy, workspaceResolved,
+                environmentHealthy, discoveryHealthy, version, workspace, summary);
+    }
+
+    public ComfyCliResult cloudLogin() { return cli.cloudLogin(); }
+    public ComfyCliResult setup() { return cli.setupYes(); }
+    public ComfyCliResult skillsInstall() { return cli.skillsInstall(); }
+
+    public ComfyCli cli() { return cli; }
+    public ComfyClientConfig getConfig() { return config; }
+
+    public ComfyJsonEnvelope parseEnvelope(String stdout) {
+        JsonNode root = parseJson(stdout, "comfy --json");
+        if (!root.isObject()) {
+            throw new ComfyException("comfy --json returned a non-object envelope");
+        }
+        return new ComfyJsonEnvelope(
+                root.path("ok").asBoolean(false),
+                textOrNull(root, "command"),
+                textOrNull(root, "version"),
+                textOrNull(root, "where"),
+                root.path("data"),
+                root.path("error"),
+                root);
+    }
+
+    private ComfyJsonEnvelope requireSuccessfulEnvelope(ComfyCliResult result, String command) {
+        if (!result.isSuccess()) {
+            throw new ComfyException(command + " failed: exit=" + result.getExitCode()
+                    + " stderr=" + result.getStderr());
+        }
+        ComfyJsonEnvelope envelope = parseEnvelope(result.getStdout());
+        if (!envelope.isOk()) {
+            throw new ComfyException(command + " reported ok=false"
+                    + (envelope.getErrorHint() == null ? "" : ": " + envelope.getErrorHint()));
+        }
+        return envelope;
+    }
+
+    private static JsonNode parseJson(String stdout, String command) {
         try {
-            return MAPPER.readTree(result.getStdout());
+            return MAPPER.readTree(stdout);
         } catch (Exception e) {
-            throw new ComfyException("comfy generate --json printed non-JSON output", e);
+            throw new ComfyException(command + " printed non-JSON output", e);
         }
     }
 
-    /**
-     * Runs {@code comfy cloud login} (browser OAuth).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult cloudLogin() {
-        return cli.cloudLogin();
+    private static String textOrNull(JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        return value.isMissingNode() || value.isNull() ? null : value.asText();
     }
 
-    /**
-     * Runs {@code comfy setup -y} (non-interactive setup).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult setup() {
-        return cli.setupYes();
-    }
-
-    /**
-     * Runs {@code comfy skills install}.
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult skillsInstall() {
-        return cli.skillsInstall();
-    }
-
-    /**
-     * Returns the underlying {@link ComfyCli} for advanced callers.
-     *
-     * @return the CLI facade backing this client; never {@code null}.
-     */
-    public ComfyCli cli() {
-        return cli;
-    }
-
-    /**
-     * Returns the runtime configuration used by this client.
-     *
-     * @return the configuration; never {@code null}.
-     */
-    public ComfyClientConfig getConfig() {
-        return config;
-    }
-
-    /**
-     * Closes this client. The default implementation is a no-op because the
-     * underlying {@link ComfyCliExecutor} does not hold any long-lived
-     * resources.
-     */
     @Override
     public void close() {
+        // CLI route owns no persistent resource; each invocation is process-scoped.
     }
 }

@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Fake comfy-mcp server for end-to-end tests.
-
-Speaks newline-delimited JSON-RPC on stdio exactly like an MCP stdio server:
-answers `initialize` (serverInfo) and `notifications/initialized` silently,
-`tools/list` with a small catalog, `tools/call` for `server_info` (fast) and
-`run_workflow` (returns text content + isError=False). Unknown requests get
-a method-not-found error.
-"""
+"""Fake comfy-mcp server for transport and lifecycle tests."""
 import json
+import os
 import sys
+import time
 
 
 def send(payload):
@@ -21,6 +16,11 @@ def reply(req_id, result):
 
 
 def main():
+    spam = int(os.environ.get("FAKE_MCP_SPAM_STDERR", "0") or "0")
+    if spam:
+        sys.stderr.write("x" * spam)
+        sys.stderr.flush()
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -50,17 +50,33 @@ def main():
             ]})
         elif method == "tools/call":
             name = params.get("name", "")
+            args = params.get("arguments") or {}
             if name == "server_info":
                 reply(req_id, {"content": [{"type": "text", "text": "comfyui up"}], "isError": False})
             elif name == "run_workflow":
-                path = (params.get("arguments") or {}).get("workflow_path", "")
+                path = args.get("workflow_path", "")
                 reply(req_id, {"content": [
                     {"type": "text", "text": "queued "},
                     {"type": "text", "text": path},
                 ], "isError": False})
-            else:
+            elif name == "mixed_content":
+                reply(req_id, {"content": [
+                    {"type": "text", "text": "preview"},
+                    {"type": "image", "mimeType": "image/png", "data": "aGVsbG8="},
+                ], "isError": False})
+            elif name == "hang":
+                # Intentionally leave the request unanswered to exercise timeout cleanup.
+                continue
+            elif name == "notification_test":
+                send({"jsonrpc": "2.0", "method": "notifications/progress",
+                      "params": {"progress": 0.5}})
+                reply(req_id, {"content": [{"type": "text", "text": "ok"}], "isError": False})
+            elif name == "nope":
                 reply(req_id, {"content": [{"type": "text", "text": "unknown tool: " + name}],
                                "isError": True})
+            else:
+                reply(req_id, {"content": [{"type": "text", "text": json.dumps(args, sort_keys=True)}],
+                               "isError": False})
         elif req_id is not None:
             send({"jsonrpc": "2.0", "id": req_id,
                   "error": {"code": -32601, "message": "method not found: " + method}})

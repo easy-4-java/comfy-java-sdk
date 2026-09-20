@@ -42,7 +42,7 @@
         <!-- Dependency versions -->
         <commons-exec.version>1.6.0</commons-exec.version>
         <jackson.version>3.2.1</jackson.version>
-        <jackson-bom.version>2.18.9</jackson-bom.version>
+        <jackson-bom.version>2.18.10</jackson-bom.version>
         <junit-jupiter.version>5.11.4</junit-jupiter.version>
         <junit.version>5.11.4</junit.version>
         <lombok.version>1.18.46</lombok.version>
@@ -239,7 +239,7 @@
                     <configuration>
                         <skip>false</skip>
                         <skipTests>false</skipTests>
-                        <argLine>-Xmx1024m -Dfile.encoding=UTF-8</argLine>
+                        <argLine>@{argLine} -Xmx1024m -Dfile.encoding=UTF-8</argLine>
                         <additionalClasspathElements>
                             <additionalClasspathElement>${basedir}/target/test-classes</additionalClasspathElement>
                         </additionalClasspathElements>
@@ -326,7 +326,7 @@
                             <goal>check</goal>
                         </goals>
                         <configuration>
-                            <haltOnFailure>false</haltOnFailure>
+                            <haltOnFailure>true</haltOnFailure>
                             <rules>
                                 <rule>
                                     <element>BUNDLE</element>
@@ -334,7 +334,7 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.90</minimum>
+                                            <minimum>0.60</minimum>
                                         </limit>
                                     </limits>
                                 </rule>
