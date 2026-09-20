@@ -1,0 +1,39 @@
+{
+  "schema": "comfy-java-sdk-parity/1",
+  "reviewedAt": "2026-09-20",
+  "cliSource": "Comfy-Org/comfy-cli@b08adc50cca24f2d29d2115e80719cb8299e6ddf",
+  "mcpSource": "Comfy-Org/comfy-mcp@e5f768d31de21ea32829381cebdda5336492a8ac",
+  "branches": ["feature/1.0.x", "feature/2.0.x", "feature/3.0.x"],
+  "cliFamilies": [
+    "setup","install","update","outdated","launch","stop","logs","run","validate",
+    "upload","download","system-stats","free","which","env","discover","set-default",
+    "generate","run-template","preview","jobs","templates","workflow","node","nodes",
+    "model","models","cloud","auth","project","assets","knowledge","build","deploy",
+    "agent","manager","pr-cache","code-search","tracking","skills","feedback",
+    "agent-review","dependency","standalone"
+  ],
+  "mcpTools": [
+    "server_info","auth_status","billing_status","auth_login","run_workflow",
+    "generate_image","list_partner_models","partner_model_schema","partner_generate",
+    "emit_partner_workflow","run_template","job","system_stats","free_memory",
+    "fetch_outputs","launch_comfyui","stop_comfyui","restart_comfyui","update_comfyui",
+    "switch_comfyui_version","install_node","get_logs","discover","which","project",
+    "search_templates","get_template","fetch_template","nodes","node_dependencies",
+    "workflow_deps","search_models","download_model","download","upload_file",
+    "validate_workflow","list_workflow_slots","list_workflow_notes","set_workflow_slot",
+    "vary_workflow"
+  ],
+  "skillsOperations": ["install","uninstall","list","show","status","validate"],
+  "invariants": [
+    "shell-free argv execution",
+    "independent probe timeout",
+    "bounded stdout/stderr",
+    "streaming NDJSON API",
+    "bounded MCP frame/content/stderr",
+    "pending RPC cleanup on every terminal path",
+    "notification/progress delivery",
+    "optional elicitation capability",
+    "deterministic process/thread/timer cleanup",
+    "real JaCoCo gate"
+  ]
+}

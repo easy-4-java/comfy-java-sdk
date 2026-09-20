@@ -30,7 +30,7 @@ import io.github.easy4j.comfy.model.ComfyCliEvent;
  */
 public final class ComfyCliStreamExecutor {
     private final ComfyClientConfig config;
-    private final ObjectMapper mapper = new JsonMapper();
+    private final ObjectMapper mapper = JsonMapper.builder().build();
 
     public ComfyCliStreamExecutor(ComfyClientConfig config) {
         this.config = Objects.requireNonNull(config, "config");

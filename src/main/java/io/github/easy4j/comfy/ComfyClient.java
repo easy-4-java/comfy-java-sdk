@@ -25,7 +25,7 @@ import io.github.easy4j.comfy.model.ComfyJsonEnvelope;
  */
 public class ComfyClient implements AutoCloseable {
 
-    private static final JsonMapper MAPPER = new JsonMapper();
+    private static final JsonMapper MAPPER = JsonMapper.builder().build();
 
     private final ComfyClientConfig config;
     private final ComfyCli cli;
