@@ -258,7 +258,12 @@ public class ComfyMcpClient implements AutoCloseable {
     public ComfyMcpCallResult getQueue() { return job("queue", null, null); }
 
     public ComfyMcpCallResult systemStats() { return callTool("system_stats", null); }
-    public ComfyMcpCallResult freeMemory() { return callTool("free_memory", null); }
+    public ComfyMcpCallResult freeMemory() { return freeMemory(true, null); }
+    public ComfyMcpCallResult freeMemory(boolean unloadModels, Boolean freeMemory) {
+        Map<String, Object> args = params("unload_models", Boolean.valueOf(unloadModels));
+        putIfNotNull(args, "free_memory", freeMemory);
+        return callTool("free_memory", args);
+    }
 
     public ComfyMcpCallResult fetchOutputs(String promptId, String outDir,
             boolean urlOnly, boolean inlineImages) {
@@ -309,7 +314,12 @@ public class ComfyMcpClient implements AutoCloseable {
         return callTool("get_logs", args);
     }
 
-    public ComfyMcpCallResult discover() { return callTool("discover", null); }
+    public ComfyMcpCallResult discover() { return discover(true, ""); }
+    public ComfyMcpCallResult discover(boolean schemasOnly, String command) {
+        return callTool("discover", params(
+                "schemas_only", Boolean.valueOf(schemasOnly),
+                "command", nullToEmpty(command)));
+    }
     public ComfyMcpCallResult which() { return callTool("which", null); }
 
     public ComfyMcpCallResult project(String action) {
