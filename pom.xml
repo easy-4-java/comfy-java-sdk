@@ -40,7 +40,6 @@
         <maven.version>4.0.0-rc-5</maven.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Dependency versions -->
-        <commons-exec.version>1.6.0</commons-exec.version>
         <jackson.version>2.22.2</jackson.version>
         <jackson-bom.version>2.22.2</jackson-bom.version>
         <junit-jupiter.version>6.1.0</junit-jupiter.version>
@@ -76,11 +75,6 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>org.apache.commons</groupId>
-                <artifactId>commons-exec</artifactId>
-                <version>${commons-exec.version}</version>
-            </dependency>
-            <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
                 <version>${slf4j.version}</version>
@@ -103,10 +97,6 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-exec</artifactId>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>

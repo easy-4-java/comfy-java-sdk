@@ -222,6 +222,24 @@ public class ComfyCli {
     }
 
     /** Raw skills family escape hatch. */
+    // Current first-party CLI top-level domains. These family wrappers keep
+    // the SDK complete without freezing rapidly-evolving beta option schemas.
+    public ComfyCliResult runTemplate(String... args) { return prefixed("run-template", args); }
+    public ComfyCliResult preview(String... args) { return prefixed("preview", args); }
+    public ComfyCliResult knowledge(String... args) { return prefixed("knowledge", args); }
+    public ComfyCliResult manager(String... args) { return prefixed("manager", args); }
+    public ComfyCliResult prCache(String... args) { return prefixed("pr-cache", args); }
+    public ComfyCliResult codeSearch(String... args) { return prefixed("code-search", args); }
+    public ComfyCliResult tracking(String... args) { return prefixed("tracking", args); }
+    public ComfyCliResult auth(String... args) { return prefixed("auth", args); }
+    public ComfyCliResult build(String... args) { return prefixed("build", args); }
+    public ComfyCliResult deploy(String... args) { return prefixed("deploy", args); }
+    public ComfyCliResult project(String... args) { return prefixed("project", args); }
+    public ComfyCliResult assets(String... args) { return prefixed("assets", args); }
+    public ComfyCliResult agent(String... args) { return prefixed("agent", args); }
+    public ComfyCliResult feedback(String... args) { return prefixed("feedback", args); }
+    public ComfyCliResult standalone(String... args) { return prefixed("standalone", args); }
+
     public ComfyCliResult skills(String... args) { return prefixed("skills", args); }
     public ComfyCliResult skillsInstall() { return executor.execute("skills", "install"); }
     public ComfyCliResult skillsInstall(String... args) { return prefixed2("skills", "install", args); }

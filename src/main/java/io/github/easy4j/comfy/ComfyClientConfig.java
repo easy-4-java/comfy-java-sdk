@@ -31,7 +31,10 @@ public class ComfyClientConfig {
     /** Dedicated timeout in seconds for {@code comfy --version} probes. */
     private int localProbeTimeoutSeconds = 5;
 
-    /** Maximum wait for stdout/stderr pump shutdown after the child exits or is killed. */
+    /** Grace period before escalating a timed-out child to destroyForcibly. */
+    private int processShutdownGraceMillis = 500;
+
+    /** Maximum wait for stdout/stderr reader shutdown after the child exits or is killed. */
     private int streamDrainTimeoutMillis = 1_000;
 
     /** Maximum stdout bytes retained per process; {@code 0} means unbounded. */
@@ -54,6 +57,9 @@ public class ComfyClientConfig {
         }
         if (localProbeTimeoutSeconds <= 0) {
             throw new IllegalStateException("localProbeTimeoutSeconds must be > 0");
+        }
+        if (processShutdownGraceMillis < 0) {
+            throw new IllegalStateException("processShutdownGraceMillis must be >= 0");
         }
         if (streamDrainTimeoutMillis < 0) {
             throw new IllegalStateException("streamDrainTimeoutMillis must be >= 0");

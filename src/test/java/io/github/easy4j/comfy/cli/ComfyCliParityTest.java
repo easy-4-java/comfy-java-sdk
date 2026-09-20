@@ -55,6 +55,20 @@ class ComfyCliParityTest {
         assertTrue(cli.skillsShow("comfy-debug").getStdout().contains("skills show comfy-debug"));
         assertTrue(cli.skillsStatus("user").getStdout().contains("skills status --scope user"));
         assertTrue(cli.skillsValidate("./my-skill").getStdout().contains("skills validate ./my-skill"));
+        assertTrue(cli.runTemplate("image_basic", "--param", "prompt=cat").getStdout()
+                .contains("run-template image_basic --param prompt=cat"));
+        assertTrue(cli.preview("clip.mp4").getStdout().contains("preview clip.mp4"));
+        assertTrue(cli.knowledge("status").getStdout().contains("knowledge status"));
+        assertTrue(cli.manager("enable").getStdout().contains("manager enable"));
+        assertTrue(cli.prCache("list").getStdout().contains("pr-cache list"));
+        assertTrue(cli.codeSearch("KSampler").getStdout().contains("code-search KSampler"));
+        assertTrue(cli.tracking("status").getStdout().contains("tracking status"));
+        assertTrue(cli.auth("list").getStdout().contains("auth list"));
+        assertTrue(cli.build("--help").getStdout().contains("build --help"));
+        assertTrue(cli.deploy("--help").getStdout().contains("deploy --help"));
+        assertTrue(cli.project("status").getStdout().contains("project status"));
+        assertTrue(cli.assets("status").getStdout().contains("assets status"));
+        assertTrue(cli.agent("--help").getStdout().contains("agent --help"));
     }
 
     @Test

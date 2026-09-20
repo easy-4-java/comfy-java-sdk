@@ -5,32 +5,31 @@
  */
 package io.github.easy4j.comfy.cli;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.exec.CommandLine;
-import org.apache.commons.exec.DefaultExecutor;
-import org.apache.commons.exec.ExecuteException;
-import org.apache.commons.exec.ExecuteWatchdog;
-import org.apache.commons.exec.PumpStreamHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.github.easy4j.comfy.ComfyClientConfig;
 
 /**
- * Synchronous, stateless subprocess executor for {@code comfy}.
+ * Synchronous, thread-safe subprocess executor for the first-party
+ * {@code comfy} CLI.
  *
- * <p>Arguments are passed as argv (never through a shell), output is decoded
- * as UTF-8, capture growth is bounded by configuration, and probes use their
- * own short timeout instead of the normal generation timeout.</p>
+ * <p>The implementation deliberately uses {@link ProcessBuilder} rather than a
+ * shell: each Java argument becomes exactly one argv item, credentials stay in
+ * the child environment, stdout/stderr capture is bounded, and timeout cleanup
+ * owns the process and all three Java-side pipes directly. Reader/writer
+ * threads are daemon threads and are joined with a bounded deadline.</p>
  */
 public class ComfyCliExecutor {
 
@@ -64,78 +63,168 @@ public class ComfyCliExecutor {
     }
 
     private ComfyCliResult runProcess(String stdin, long timeoutMs, String... args) {
-        // Literal executable path/name: do not parse it as a command line.
-        CommandLine cmd = new CommandLine(config.getLocalExecutable());
+        List<String> command = new ArrayList<String>();
+        command.add(config.getLocalExecutable());
         if (args != null) {
             for (String arg : args) {
-                if (arg != null) {
-                    cmd.addArgument(arg, false);
-                }
+                if (arg != null) command.add(arg);
             }
         }
 
-        DefaultExecutor executor = new DefaultExecutor();
-
-        Map<String, String> childEnv = null;
+        ProcessBuilder builder = new ProcessBuilder(command);
         if (config.getEnvironment() != null && !config.getEnvironment().isEmpty()) {
-            childEnv = new LinkedHashMap<String, String>(System.getenv());
+            // ProcessBuilder starts with a mutable copy of the parent
+            // environment, so overrides preserve PATH and all unrelated keys.
+            Map<String, String> childEnv = builder.environment();
             childEnv.putAll(config.getEnvironment());
         }
 
-        CappedOutputStream stdout = new CappedOutputStream(config.getMaxStdoutBytes());
-        CappedOutputStream stderr = new CappedOutputStream(config.getMaxStderrBytes());
-        byte[] stdinBytes = stdin == null ? new byte[0] : stdin.getBytes(StandardCharsets.UTF_8);
-        PumpStreamHandler streamHandler = new PumpStreamHandler(stdout, stderr, new ByteArrayInputStream(stdinBytes));
-        streamHandler.setStopTimeout(Duration.ofMillis(config.getStreamDrainTimeoutMillis()));
-        executor.setStreamHandler(streamHandler);
-
-        ExecuteWatchdog watchdog = new ExecuteWatchdog(timeoutMs);
-        executor.setWatchdog(watchdog);
-
-        long startNanos = System.nanoTime();
+        final Process process;
         try {
-            int exitCode = childEnv == null ? executor.execute(cmd) : executor.execute(cmd, childEnv);
-            String out = decodeUtf8(stdout).trim();
-            String err = decodeUtf8(stderr).trim();
-            log.debug("comfy CLI executed: exitCode={}, stdout.len={}, stdout.truncated={}, stderr.truncated={}",
-                    exitCode, out.length(), stdout.isTruncated(), stderr.isTruncated());
-            if (watchdog.killedProcess()) {
-                return timeoutResult(timeoutMs, out, err, stdout, stderr);
-            }
-            return new ComfyCliResult(exitCode, out, err, stdout.isTruncated(), stderr.isTruncated());
-        } catch (ExecuteException e) {
-            String out = decodeUtf8(stdout).trim();
-            String err = decodeUtf8(stderr).trim();
-            boolean timedOut = watchdog.killedProcess()
-                    || System.nanoTime() - startNanos >= timeoutMs * 1_000_000L;
-            if (timedOut) {
-                return timeoutResult(timeoutMs, out, err, stdout, stderr);
-            }
-            return new ComfyCliResult(e.getExitValue(), out, err, stdout.isTruncated(), stderr.isTruncated());
+            process = builder.start();
         } catch (IOException e) {
-            String out = decodeUtf8(stdout).trim();
-            String err = decodeUtf8(stderr).trim();
-            boolean timedOut = watchdog.killedProcess()
-                    || System.nanoTime() - startNanos >= timeoutMs * 1_000_000L;
-            if (timedOut) {
-                return timeoutResult(timeoutMs, out, err, stdout, stderr);
-            }
-            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            return new ComfyCliResult(-1, out, message, stdout.isTruncated(), stderr.isTruncated());
+            return new ComfyCliResult(-1, "", safeMessage(e), false, false);
         }
+
+        final CappedOutputStream stdout = new CappedOutputStream(config.getMaxStdoutBytes());
+        final CappedOutputStream stderr = new CappedOutputStream(config.getMaxStderrBytes());
+        final Thread stdoutReader = daemon("comfy-cli-stdout", () -> copy(process.getInputStream(), stdout));
+        final Thread stderrReader = daemon("comfy-cli-stderr", () -> copy(process.getErrorStream(), stderr));
+        final byte[] stdinBytes = stdin == null ? new byte[0] : stdin.getBytes(StandardCharsets.UTF_8);
+        final Thread stdinWriter = daemon("comfy-cli-stdin", () -> writeAndClose(process.getOutputStream(), stdinBytes));
+
+        stdoutReader.start();
+        stderrReader.start();
+        stdinWriter.start();
+
+        boolean timedOut = false;
+        int exitCode = -1;
+        try {
+            boolean finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+            if (!finished) {
+                timedOut = true;
+                terminate(process);
+            } else {
+                exitCode = process.exitValue();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            timedOut = true;
+            terminate(process);
+        } finally {
+            join(stdinWriter, config.getStreamDrainTimeoutMillis());
+            drainReaders(process, stdoutReader, stderrReader);
+        }
+
+        String out = decodeUtf8(stdout).trim();
+        String err = decodeUtf8(stderr).trim();
+        if (timedOut) {
+            return timeoutResult(timeoutMs, out, err, stdout, stderr);
+        }
+
+        // A reader may still have been force-unblocked because a descendant
+        // inherited the pipe after the direct child exited. The direct child's
+        // real exit status remains authoritative; captured output is the
+        // bounded prefix observed before the drain deadline.
+        log.debug("comfy CLI executed: exitCode={}, stdout.len={}, stdout.truncated={}, stderr.truncated={}",
+                exitCode, out.length(), stdout.isTruncated(), stderr.isTruncated());
+        return new ComfyCliResult(exitCode, out, err, stdout.isTruncated(), stderr.isTruncated());
+    }
+
+    private void terminate(Process process) {
+        if (!process.isAlive()) return;
+        process.destroy();
+        try {
+            if (process.isAlive()
+                    && !process.waitFor(config.getProcessShutdownGraceMillis(), TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                process.waitFor(config.getProcessShutdownGraceMillis(), TimeUnit.MILLISECONDS);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            if (process.isAlive()) process.destroyForcibly();
+        }
+    }
+
+    private void drainReaders(Process process, Thread stdoutReader, Thread stderrReader) {
+        long drainMs = config.getStreamDrainTimeoutMillis();
+        join(stdoutReader, drainMs);
+        join(stderrReader, drainMs);
+        if (stdoutReader.isAlive() || stderrReader.isAlive()) {
+            // A descendant may still own inherited pipe write-ends. Closing
+            // our read-ends prevents that descendant from extending the Java
+            // call lifetime or retaining reader threads.
+            closeQuietly(process.getInputStream());
+            closeQuietly(process.getErrorStream());
+            join(stdoutReader, Math.min(250L, drainMs));
+            join(stderrReader, Math.min(250L, drainMs));
+        }
+        closeQuietly(process.getOutputStream());
+    }
+
+    private static void copy(InputStream input, OutputStream output) {
+        byte[] buffer = new byte[8192];
+        try {
+            int n;
+            while ((n = input.read(buffer)) != -1) {
+                output.write(buffer, 0, n);
+            }
+        } catch (IOException ignored) {
+            // Expected when timeout/drain cleanup closes the Java-side pipe.
+        } finally {
+            closeQuietly(input);
+        }
+    }
+
+    private static void writeAndClose(OutputStream output, byte[] bytes) {
+        try {
+            if (bytes.length > 0) {
+                output.write(bytes);
+                output.flush();
+            }
+        } catch (IOException ignored) {
+            // The child may legitimately exit before consuming stdin.
+        } finally {
+            closeQuietly(output);
+        }
+    }
+
+    private static Thread daemon(String name, Runnable task) {
+        Thread thread = new Thread(task, name);
+        thread.setDaemon(true);
+        return thread;
+    }
+
+    private static void join(Thread thread, long millis) {
+        if (thread == null || millis <= 0 || thread == Thread.currentThread()) return;
+        try {
+            thread.join(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void closeQuietly(java.io.Closeable closeable) {
+        if (closeable == null) return;
+        try {
+            closeable.close();
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static String safeMessage(IOException e) {
+        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
     private static ComfyCliResult timeoutResult(long timeoutMs, String out, String err,
                                                  CappedOutputStream stdout, CappedOutputStream stderr) {
         String detail = "comfy CLI timed out after " + timeoutMs + " ms";
-        if (err != null && !err.isEmpty()) {
-            detail += "\n" + err;
-        }
+        if (err != null && !err.isEmpty()) detail += "\n" + err;
         return new ComfyCliResult(-1, out, detail, stdout.isTruncated(), stderr.isTruncated());
     }
 
     private static String decodeUtf8(CappedOutputStream buffer) {
-        return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
+        return new String(buffer.snapshot(), StandardCharsets.UTF_8);
     }
 
     /** Prefix-retaining bounded capture to prevent unbounded child-output growth. */
@@ -149,37 +238,29 @@ public class ComfyCliExecutor {
         }
 
         @Override
-        public void write(int b) {
+        public synchronized void write(int b) {
             totalBytes++;
-            if (maxBytes == 0 || delegate.size() < maxBytes) {
-                delegate.write(b);
-            }
+            if (maxBytes == 0 || delegate.size() < maxBytes) delegate.write(b);
         }
 
         @Override
-        public void write(byte[] b, int off, int len) {
-            if (b == null) {
-                throw new NullPointerException("b");
-            }
-            if (off < 0 || len < 0 || off + len > b.length) {
-                throw new IndexOutOfBoundsException();
-            }
+        public synchronized void write(byte[] b, int off, int len) {
+            if (b == null) throw new NullPointerException("b");
+            if (off < 0 || len < 0 || off + len > b.length) throw new IndexOutOfBoundsException();
             totalBytes += len;
             if (maxBytes == 0) {
                 delegate.write(b, off, len);
                 return;
             }
             int remaining = maxBytes - delegate.size();
-            if (remaining > 0) {
-                delegate.write(b, off, Math.min(remaining, len));
-            }
+            if (remaining > 0) delegate.write(b, off, Math.min(remaining, len));
         }
 
-        private byte[] toByteArray() {
+        private synchronized byte[] snapshot() {
             return delegate.toByteArray();
         }
 
-        private boolean isTruncated() {
+        private synchronized boolean isTruncated() {
             return maxBytes > 0 && totalBytes > delegate.size();
         }
     }
