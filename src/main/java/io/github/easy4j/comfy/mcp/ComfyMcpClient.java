@@ -2,35 +2,28 @@
  * Copyright (c) 2018-present, easy-4-java (https://github.com/easy-4-java).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 package io.github.easy4j.comfy.mcp;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,31 +32,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.github.easy4j.comfy.ComfyException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 
 /**
- * Client for the comfy-mcp route: spawns the MCP server as a child process
- * and drives it over JSON-RPC on stdio (newline-delimited JSON, the MCP
- * stdio transport).
+ * Local Comfy MCP client using newline-delimited JSON-RPC over stdio.
  *
- * <p>Lifecycle: {@link #connect()} performs the MCP {@code initialize}
- * handshake and completes the {@code notifications/initialized} sequence;
- * {@link #listTools()} discovers the tool catalog ({@code server_info},
- * {@code run_workflow}, {@code search_templates}, {@code launch_comfyui},
- * &hellip;); {@link #callTool(String, Map)} executes one tool and returns the
- * concatenated text content. {@link #close()} terminates the server.</p>
- *
- * <p>The client is thread-safe: concurrent {@code tools/call} requests are
- * correlated by JSON-RPC id. Each client owns exactly one server child
- * process; {@link #close()} destroys it.</p>
- *
- * @author <a href="https://github.com/loong10k">Loong Wan</a>
- * @since 1.0.0
- * @see ComfyMcpConfig
- * @see ComfyMcpTool
- * @see ComfyMcpCallResult
+ * <p>One client owns exactly one child process. Requests may be concurrent and
+ * are correlated by JSON-RPC id. Both stdout and stderr are continuously
+ * drained; pending requests are removed on response, timeout, write failure,
+ * process exit and close.</p>
  */
 public class ComfyMcpClient implements AutoCloseable {
 
@@ -71,8 +51,7 @@ public class ComfyMcpClient implements AutoCloseable {
 
     private final ComfyMcpConfig config;
     private final ObjectMapper mapper =
-            JsonMapper.builder().disable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                    .build();
+            JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
     private final Map<Long, CompletableFuture<JsonNode>> pendingRpcs =
             new ConcurrentHashMap<Long, CompletableFuture<JsonNode>>();
     private final AtomicLong rpcIds = new AtomicLong();
@@ -83,78 +62,88 @@ public class ComfyMcpClient implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
+    private final Object writeLock = new Object();
 
     private volatile Process process;
     private volatile PrintWriter stdin;
+    private volatile Thread stdoutThread;
+    private volatile Thread stderrThread;
     private volatile String serverName;
     private volatile String serverVersion;
 
-    /**
-     * Creates a new client bound to the given configuration.
-     *
-     * @param config runtime configuration; must not be {@code null}.
-     */
     public ComfyMcpClient(ComfyMcpConfig config) {
         this.config = Objects.requireNonNull(config, "config");
         this.config.validate();
     }
 
     /**
-     * Spawns the MCP server child process and performs the MCP
-     * {@code initialize} handshake plus {@code notifications/initialized}.
+     * Starts {@code comfy-mcp} and performs MCP initialize/initialized.
      *
-     * @return the server-reported version string, may be {@code null}.
-     * @throws ComfyException when the process fails to start or the handshake
-     *                        fails or times out.
+     * @throws IllegalStateException if already connected or closed.
      */
-    public String connect() {
+    public synchronized String connect() {
+        if (closed.get()) {
+            throw new IllegalStateException("comfy mcp client is closed");
+        }
+        if (initialized.get() || process != null) {
+            throw new IllegalStateException("comfy mcp client is already connected");
+        }
+
         List<String> command = new ArrayList<String>();
         command.add(config.getLocalExecutable());
         if (config.getMcpArgs() != null) {
-            for (String arg : config.getMcpArgs()) {
-                command.add(arg);
-            }
+            Collections.addAll(command, config.getMcpArgs());
         }
+
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.redirectErrorStream(false);
         if (config.getEnvironment() != null && !config.getEnvironment().isEmpty()) {
             builder.environment().putAll(config.getEnvironment());
         }
-        try {
-            process = builder.start();
-        } catch (IOException e) {
-            throw new ComfyException("Failed to spawn comfy-mcp: " + config.getLocalExecutable(), e);
-        }
-        stdin = new PrintWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8), true);
-        Thread reader = new Thread(this::readLoop, "comfy-mcp-reader");
-        reader.setDaemon(true);
-        reader.start();
 
-        Map<String, Object> clientInfo = new LinkedHashMap<String, Object>();
-        clientInfo.put("name", config.getClientName());
-        clientInfo.put("version", config.getClientVersion());
-        Map<String, Object> params = new LinkedHashMap<String, Object>();
-        params.put("protocolVersion", config.getProtocolVersion());
-        params.put("capabilities", new LinkedHashMap<String, Object>());
-        params.put("clientInfo", clientInfo);
-        JsonNode result = await(request("initialize", params), config.getConnectTimeoutMillis(), "initialize");
-        notify("notifications/initialized", new LinkedHashMap<String, Object>());
-        if (result.hasNonNull("serverInfo")) {
-            serverName = result.path("serverInfo").path("name").asText(null);
-            serverVersion = result.path("serverInfo").path("version").asText(null);
+        try {
+            Process child = builder.start();
+            process = child;
+            stdin = new PrintWriter(new OutputStreamWriter(child.getOutputStream(), StandardCharsets.UTF_8), true);
+            stdoutThread = daemon("comfy-mcp-reader", () -> readLoop(child));
+            stderrThread = daemon("comfy-mcp-stderr", () -> drainStderr(child));
+            stdoutThread.start();
+            stderrThread.start();
+
+            Map<String, Object> clientInfo = new LinkedHashMap<String, Object>();
+            clientInfo.put("name", config.getClientName());
+            clientInfo.put("version", config.getClientVersion());
+            Map<String, Object> params = new LinkedHashMap<String, Object>();
+            params.put("protocolVersion", config.getProtocolVersion());
+            params.put("capabilities", new LinkedHashMap<String, Object>());
+            params.put("clientInfo", clientInfo);
+
+            JsonNode result = await(
+                    request("initialize", params, config.getConnectTimeoutMillis(), "initialize"),
+                    "initialize");
+            notify("notifications/initialized", new LinkedHashMap<String, Object>());
+            if (result.hasNonNull("serverInfo")) {
+                serverName = result.path("serverInfo").path("name").asText(null);
+                serverVersion = result.path("serverInfo").path("version").asText(null);
+            }
+            initialized.set(true);
+            return serverVersion;
+        } catch (IOException e) {
+            cleanupTransport();
+            throw new ComfyException("Failed to spawn comfy-mcp: " + config.getLocalExecutable(), e);
+        } catch (RuntimeException e) {
+            failAllPending(new ComfyException("comfy mcp connect failed", e));
+            cleanupTransport();
+            throw e;
         }
-        initialized.set(true);
-        return serverVersion;
     }
 
-    /**
-     * Lists the tools the server advertises.
-     *
-     * @return the tool catalog; never {@code null}.
-     */
     public List<ComfyMcpTool> listTools() {
-        JsonNode result = await(request("tools/list", new LinkedHashMap<String, Object>()),
-                config.getConnectTimeoutMillis(), "tools/list");
+        ensureConnected();
+        JsonNode result = await(
+                request("tools/list", new LinkedHashMap<String, Object>(),
+                        config.getConnectTimeoutMillis(), "tools/list"),
+                "tools/list");
         List<ComfyMcpTool> tools = new ArrayList<ComfyMcpTool>();
         for (JsonNode tool : result.path("tools")) {
             tools.add(new ComfyMcpTool(
@@ -165,166 +154,349 @@ public class ComfyMcpClient implements AutoCloseable {
         return tools;
     }
 
-    /**
-     * Calls one tool asynchronously.
-     *
-     * @param name      the tool name.
-     * @param arguments tool arguments (JSON-Schema-shaped); may be {@code null}.
-     * @return a future completed with the call result, or completed
-     *         exceptionally with a {@link ComfyException}.
-     */
-    public CompletableFuture<ComfyMcpCallResult> callToolAsync(String name, Map<String, Object> arguments) {
+    public CompletableFuture<ComfyMcpCallResult> callToolAsync(
+            String name, Map<String, Object> arguments) {
         Objects.requireNonNull(name, "name");
-        if (closed.get()) {
-            throw new IllegalStateException("comfy mcp client is closed");
-        }
-        if (!initialized.get()) {
-            throw new IllegalStateException("comfy mcp client is not connected");
-        }
+        ensureConnected();
         Map<String, Object> params = new LinkedHashMap<String, Object>();
         params.put("name", name);
-        params.put("arguments", arguments == null ? new LinkedHashMap<String, Object>() : arguments);
-        CompletableFuture<JsonNode> response = request("tools/call", params);
-        CompletableFuture<ComfyMcpCallResult> future = response.thenApply(this::toCallResult);
-        scheduleTimeout(future, config.getReadTimeoutMillis(), "tools/call " + name);
-        return future;
+        params.put("arguments", arguments == null
+                ? new LinkedHashMap<String, Object>() : new LinkedHashMap<String, Object>(arguments));
+        return request("tools/call", params, config.getReadTimeoutMillis(), "tools/call " + name)
+                .thenApply(this::toCallResult);
     }
 
-    /**
-     * Calls one tool, blocking until it completes.
-     *
-     * @param name      the tool name.
-     * @param arguments tool arguments; may be {@code null}.
-     * @return the call result; never {@code null}.
-     * @throws ComfyException when the call fails or times out.
-     */
     public ComfyMcpCallResult callTool(String name, Map<String, Object> arguments) {
-        try {
-            return callToolAsync(name, arguments).get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ComfyException("comfy mcp tools/call interrupted", e);
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause() == null ? e : e.getCause();
-            if (cause instanceof ComfyException) {
-                throw (ComfyException) cause;
-            }
-            if (cause instanceof RuntimeException) {
-                throw (RuntimeException) cause;
-            }
-            throw new ComfyException("comfy mcp tools/call failed", cause);
-        }
+        return awaitCall(callToolAsync(name, arguments), "tools/call " + name);
     }
 
-    /**
-     * Convenience wrapper for the {@code server_info} tool ("call first" per
-     * the Comfy docs &mdash; verifies the local ComfyUI is up).
-     *
-     * @return the raw JSON-RPC result node; never {@code null}.
-     */
-    public JsonNode serverInfo() {
-        return rawCall("server_info");
+    // ---- current comfy-mcp typed conveniences ------------------------------
+
+    public JsonNode serverInfo() { return callTool("server_info", null).getRaw(); }
+    public ComfyMcpCallResult authStatus() { return callTool("auth_status", null); }
+    public ComfyMcpCallResult billingStatus() { return callTool("billing_status", null); }
+    public ComfyMcpCallResult authLogin() { return callTool("auth_login", null); }
+
+    public ComfyMcpCallResult runWorkflow(String workflowPath, boolean wait,
+            double timeoutSeconds, boolean confirmSpend) {
+        return callTool("run_workflow", params(
+                "workflow_path", Objects.requireNonNull(workflowPath, "workflowPath"),
+                "wait", Boolean.valueOf(wait),
+                "timeout_seconds", Double.valueOf(timeoutSeconds),
+                "confirm_spend", Boolean.valueOf(confirmSpend)));
     }
 
-    /**
-     * Returns the server name reported by {@code initialize}, or {@code null}
-     * before {@link #connect()}.
-     *
-     * @return the server name, may be {@code null}.
-     */
-    public String getServerName() {
-        return serverName;
+    public ComfyMcpCallResult generateImage(String prompt, String checkpoint,
+            boolean wait, double timeoutSeconds) {
+        Map<String, Object> args = params(
+                "prompt", Objects.requireNonNull(prompt, "prompt"),
+                "wait", Boolean.valueOf(wait),
+                "timeout_seconds", Double.valueOf(timeoutSeconds));
+        putIfNotNull(args, "checkpoint", checkpoint);
+        return callTool("generate_image", args);
     }
 
-    /**
-     * Returns the server version reported by {@code initialize}, or
-     * {@code null} before {@link #connect()}.
-     *
-     * @return the server version, may be {@code null}.
-     */
-    public String getServerVersion() {
-        return serverVersion;
+    public ComfyMcpCallResult listPartnerModels(String style, String partner,
+            String query, int limit, int offset) {
+        return callTool("list_partner_models", params(
+                "style", nullToEmpty(style),
+                "partner", nullToEmpty(partner),
+                "query", nullToEmpty(query),
+                "limit", Integer.valueOf(limit),
+                "offset", Integer.valueOf(offset)));
     }
 
-    /**
-     * Returns whether the client has been closed.
-     *
-     * @return {@code true} after {@link #close()}.
-     */
-    public boolean isClosed() {
-        return closed.get();
+    public ComfyMcpCallResult partnerModelSchema(String model) {
+        return callTool("partner_model_schema",
+                params("model", Objects.requireNonNull(model, "model")));
     }
 
-    /**
-     * Terminates the MCP server child process and releases the timer.
-     * Idempotent.
-     */
+    public ComfyMcpCallResult partnerGenerate(String model, Map<String, Object> modelParams,
+            boolean confirmSpend, String outPath, double timeoutSeconds) {
+        Map<String, Object> args = params(
+                "model", Objects.requireNonNull(model, "model"),
+                "params", modelParams == null ? new LinkedHashMap<String, Object>() : modelParams,
+                "confirm_spend", Boolean.valueOf(confirmSpend),
+                "timeout_seconds", Double.valueOf(timeoutSeconds));
+        putIfNotNull(args, "out_path", outPath);
+        return callTool("partner_generate", args);
+    }
+
+    public ComfyMcpCallResult emitPartnerWorkflow(String model, String outPath,
+            Map<String, Object> modelParams) {
+        return callTool("emit_partner_workflow", params(
+                "model", Objects.requireNonNull(model, "model"),
+                "out_path", Objects.requireNonNull(outPath, "outPath"),
+                "params", modelParams == null ? new LinkedHashMap<String, Object>() : modelParams));
+    }
+
+    public ComfyMcpCallResult runTemplate(String name, Map<String, Object> templateParams,
+            boolean confirmSpend, boolean wait, double timeoutSeconds) {
+        return callTool("run_template", params(
+                "name", Objects.requireNonNull(name, "name"),
+                "params", templateParams == null ? new LinkedHashMap<String, Object>() : templateParams,
+                "confirm_spend", Boolean.valueOf(confirmSpend),
+                "wait", Boolean.valueOf(wait),
+                "timeout_seconds", Double.valueOf(timeoutSeconds)));
+    }
+
+    public ComfyMcpCallResult job(String action, String promptId, Double timeoutSeconds) {
+        Map<String, Object> args = params("action", action == null ? "status" : action);
+        putIfNotNull(args, "prompt_id", promptId);
+        putIfNotNull(args, "timeout_seconds", timeoutSeconds);
+        return callTool("job", args);
+    }
+
+    public ComfyMcpCallResult jobStatus(String promptId) { return job("status", promptId, null); }
+    public ComfyMcpCallResult waitForJob(String promptId, double timeoutSeconds) {
+        return job("wait", promptId, Double.valueOf(timeoutSeconds));
+    }
+    public ComfyMcpCallResult watchJob(String promptId, double timeoutSeconds) {
+        return job("watch", promptId, Double.valueOf(timeoutSeconds));
+    }
+    public ComfyMcpCallResult cancelJob(String promptId) { return job("cancel", promptId, null); }
+    public ComfyMcpCallResult getQueue() { return job("queue", null, null); }
+
+    public ComfyMcpCallResult systemStats() { return callTool("system_stats", null); }
+    public ComfyMcpCallResult freeMemory() { return freeMemory(true, null); }
+    public ComfyMcpCallResult freeMemory(boolean unloadModels, Boolean freeMemory) {
+        Map<String, Object> args = params("unload_models", Boolean.valueOf(unloadModels));
+        putIfNotNull(args, "free_memory", freeMemory);
+        return callTool("free_memory", args);
+    }
+
+    public ComfyMcpCallResult fetchOutputs(String promptId, String outDir,
+            boolean urlOnly, boolean inlineImages) {
+        return callTool("fetch_outputs", params(
+                "prompt_id", Objects.requireNonNull(promptId, "promptId"),
+                "out_dir", Objects.requireNonNull(outDir, "outDir"),
+                "url_only", Boolean.valueOf(urlOnly),
+                "inline_images", Boolean.valueOf(inlineImages)));
+    }
+
+    public ComfyMcpCallResult launchComfyUi(List<String> extraArgs, boolean confirmNetworkExposure) {
+        return callTool("launch_comfyui", params(
+                "extra_args", extraArgs == null ? Collections.emptyList() : extraArgs,
+                "confirm_network_exposure", Boolean.valueOf(confirmNetworkExposure)));
+    }
+
+    public ComfyMcpCallResult stopComfyUi() { return callTool("stop_comfyui", null); }
+
+    public ComfyMcpCallResult restartComfyUi(List<String> extraArgs,
+            boolean confirmNetworkExposure, boolean confirmKillUntracked) {
+        return callTool("restart_comfyui", params(
+                "extra_args", extraArgs == null ? Collections.emptyList() : extraArgs,
+                "confirm_network_exposure", Boolean.valueOf(confirmNetworkExposure),
+                "confirm_kill_untracked", Boolean.valueOf(confirmKillUntracked)));
+    }
+
+    public ComfyMcpCallResult updateComfyUi(String target, boolean confirmUpdateAll) {
+        return callTool("update_comfyui", params(
+                "target", target == null ? "comfy" : target,
+                "confirm_update_all", Boolean.valueOf(confirmUpdateAll)));
+    }
+
+    public ComfyMcpCallResult switchComfyUiVersion(String version, boolean confirmSwitch) {
+        return callTool("switch_comfyui_version", params(
+                "version", Objects.requireNonNull(version, "version"),
+                "confirm_switch", Boolean.valueOf(confirmSwitch)));
+    }
+
+    public ComfyMcpCallResult installNode(List<String> names, boolean confirmInstall) {
+        return callTool("install_node", params(
+                "names", Objects.requireNonNull(names, "names"),
+                "confirm_install", Boolean.valueOf(confirmInstall)));
+    }
+
+    public ComfyMcpCallResult getLogs(int tail, Integer port) {
+        Map<String, Object> args = params("tail", Integer.valueOf(tail));
+        putIfNotNull(args, "port", port);
+        return callTool("get_logs", args);
+    }
+
+    public ComfyMcpCallResult discover() { return discover(true, ""); }
+    public ComfyMcpCallResult discover(boolean schemasOnly, String command) {
+        return callTool("discover", params(
+                "schemas_only", Boolean.valueOf(schemasOnly),
+                "command", nullToEmpty(command)));
+    }
+    public ComfyMcpCallResult which() { return callTool("which", null); }
+
+    public ComfyMcpCallResult project(String action) {
+        return callTool("project", params("action", action == null ? "status" : action));
+    }
+
+    public ComfyMcpCallResult searchTemplates(String query, int limit, int offset,
+            String tag, String type, String model, String provider, boolean excludeApi) {
+        return callTool("search_templates", params(
+                "query", nullToEmpty(query),
+                "limit", Integer.valueOf(limit),
+                "offset", Integer.valueOf(offset),
+                "tag", nullToEmpty(tag),
+                "type", nullToEmpty(type),
+                "model", nullToEmpty(model),
+                "provider", nullToEmpty(provider),
+                "exclude_api", Boolean.valueOf(excludeApi)));
+    }
+
+    public ComfyMcpCallResult getTemplate(String name) {
+        return getTemplate(name, true);
+    }
+
+    public ComfyMcpCallResult getTemplate(String name, boolean checkLocal) {
+        return callTool("get_template", params(
+                "name", Objects.requireNonNull(name, "name"),
+                "check_local", Boolean.valueOf(checkLocal)));
+    }
+
+    public ComfyMcpCallResult fetchTemplate(String name, String outPath, boolean checkLocal) {
+        return callTool("fetch_template", params(
+                "name", Objects.requireNonNull(name, "name"),
+                "out_path", Objects.requireNonNull(outPath, "outPath"),
+                "check_local", Boolean.valueOf(checkLocal)));
+    }
+
+    public ComfyMcpCallResult nodes(String action, Map<String, Object> options) {
+        Map<String, Object> args = options == null
+                ? new LinkedHashMap<String, Object>()
+                : new LinkedHashMap<String, Object>(options);
+        args.put("action", action == null ? "search" : action);
+        return callTool("nodes", args);
+    }
+
+    public ComfyMcpCallResult nodeDependencies(String pack, String registryId) {
+        return callTool("node_dependencies", params(
+                "pack", nullToEmpty(pack),
+                "registry_id", nullToEmpty(registryId)));
+    }
+
+    public ComfyMcpCallResult workflowDeps(String workflowPath) {
+        return callTool("workflow_deps",
+                params("workflow_path", Objects.requireNonNull(workflowPath, "workflowPath")));
+    }
+
+    public ComfyMcpCallResult searchModels(String query, String folder) {
+        return callTool("search_models", params(
+                "query", nullToEmpty(query),
+                "folder", nullToEmpty(folder)));
+    }
+
+    public ComfyMcpCallResult downloadModel(String url, String relativePath,
+            String filename, boolean wait, double timeoutSeconds) {
+        Map<String, Object> args = params(
+                "url", Objects.requireNonNull(url, "url"),
+                "wait", Boolean.valueOf(wait),
+                "timeout_seconds", Double.valueOf(timeoutSeconds));
+        putIfNotNull(args, "relative_path", relativePath);
+        putIfNotNull(args, "filename", filename);
+        return callTool("download_model", args);
+    }
+
+    public ComfyMcpCallResult download(String action, String downloadId, Double timeoutSeconds) {
+        Map<String, Object> args = params("action", action == null ? "status" : action);
+        putIfNotNull(args, "download_id", downloadId);
+        putIfNotNull(args, "timeout_seconds", timeoutSeconds);
+        return callTool("download", args);
+    }
+
+    public ComfyMcpCallResult uploadFile(List<String> paths, boolean overwrite) {
+        return callTool("upload_file", params(
+                "paths", Objects.requireNonNull(paths, "paths"),
+                "overwrite", Boolean.valueOf(overwrite)));
+    }
+
+    public ComfyMcpCallResult validateWorkflow(String workflowPath) {
+        return callTool("validate_workflow",
+                params("workflow_path", Objects.requireNonNull(workflowPath, "workflowPath")));
+    }
+
+    public ComfyMcpCallResult listWorkflowSlots(String workflowPath) {
+        return callTool("list_workflow_slots",
+                params("workflow_path", Objects.requireNonNull(workflowPath, "workflowPath")));
+    }
+
+    public ComfyMcpCallResult listWorkflowNotes(String workflowPath) {
+        return callTool("list_workflow_notes",
+                params("workflow_path", Objects.requireNonNull(workflowPath, "workflowPath")));
+    }
+
+    public ComfyMcpCallResult setWorkflowSlot(String workflowPath, List<?> overrides, boolean stdout) {
+        return callTool("set_workflow_slot", params(
+                "workflow_path", Objects.requireNonNull(workflowPath, "workflowPath"),
+                "overrides", Objects.requireNonNull(overrides, "overrides"),
+                "stdout", Boolean.valueOf(stdout)));
+    }
+
+    public ComfyMcpCallResult varyWorkflow(String workflowPath, List<?> slots, String outDir) {
+        Map<String, Object> args = params(
+                "workflow_path", Objects.requireNonNull(workflowPath, "workflowPath"),
+                "slots", Objects.requireNonNull(slots, "slots"));
+        putIfNotNull(args, "out_dir", outDir);
+        return callTool("vary_workflow", args);
+    }
+
+    // ---- state/lifecycle ---------------------------------------------------
+
+    public String getServerName() { return serverName; }
+    public String getServerVersion() { return serverVersion; }
+    public boolean isClosed() { return closed.get(); }
+    public boolean isConnected() { return initialized.get() && !closed.get(); }
+    int pendingRequestCount() { return pendingRpcs.size(); }
+
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        timer.shutdownNow();
-        Process current = process;
-        if (current != null) {
-            current.destroy();
-        }
+        initialized.set(false);
         failAllPending(new ComfyException("comfy mcp client closed"));
+        cleanupTransport();
+        timer.shutdownNow();
     }
 
-    // ============================================================
-    // transport internals
-    // ============================================================
+    // ---- transport internals ----------------------------------------------
 
-    private JsonNode rawCall(String tool) {
-        return await(request("tools/call", paramsFor(tool, null)),
-                config.getReadTimeoutMillis(), "tools/call " + tool);
-    }
-
-    private Map<String, Object> paramsFor(String name, Map<String, Object> arguments) {
-        Map<String, Object> params = new LinkedHashMap<String, Object>();
-        params.put("name", name);
-        params.put("arguments", arguments == null ? new LinkedHashMap<String, Object>() : arguments);
-        return params;
-    }
-
-    private ComfyMcpCallResult toCallResult(JsonNode result) {
-        StringBuilder text = new StringBuilder();
-        int cap = config.getMaxContentChars() <= 0 ? Integer.MAX_VALUE : config.getMaxContentChars();
-        boolean truncated = false;
-        for (JsonNode content : result.path("content")) {
-            if (!"text".equals(content.path("type").asText(""))) {
-                continue;
-            }
-            String piece = content.path("text").asText("");
-            if (text.length() >= cap) {
-                truncated = true;
-                break;
-            }
-            if (text.length() + piece.length() > cap) {
-                text.append(piece, 0, cap - text.length());
-                truncated = true;
-                break;
-            }
-            text.append(piece);
-        }
-        if (truncated) {
-            log.warn("comfy mcp tool content truncated at maxContentChars={}", config.getMaxContentChars());
-        }
-        boolean isError = result.path("isError").asBoolean(false);
-        return new ComfyMcpCallResult(text.toString(), isError, result);
-    }
-
-    private CompletableFuture<JsonNode> request(String method, Map<String, Object> params) {
-        long id = rpcIds.incrementAndGet();
+    private CompletableFuture<JsonNode> request(String method, Map<String, Object> params,
+            long timeoutMillis, String what) {
+        ensureTransportOpen();
+        final long id = rpcIds.incrementAndGet();
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("jsonrpc", "2.0");
         payload.put("id", Long.valueOf(id));
         payload.put("method", method);
         payload.put("params", params);
-        CompletableFuture<JsonNode> future = new CompletableFuture<JsonNode>();
+
+        final CompletableFuture<JsonNode> future = new CompletableFuture<JsonNode>();
         pendingRpcs.put(Long.valueOf(id), future);
-        writeJson(payload);
+
+        try {
+            writeJson(payload);
+        } catch (RuntimeException e) {
+            pendingRpcs.remove(Long.valueOf(id), future);
+            future.completeExceptionally(e);
+            throw e;
+        }
+
+        final ScheduledFuture<?> guard;
+        try {
+            guard = timeoutMillis <= 0 ? null : timer.schedule(() -> {
+                if (pendingRpcs.remove(Long.valueOf(id), future)) {
+                    future.completeExceptionally(new ComfyException(
+                            "comfy mcp " + what + " timed out after " + timeoutMillis + " ms"));
+                }
+            }, timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            pendingRpcs.remove(Long.valueOf(id), future);
+            future.completeExceptionally(new ComfyException("comfy mcp timer is closed", e));
+            return future;
+        }
+
+        future.whenComplete((value, error) -> {
+            pendingRpcs.remove(Long.valueOf(id), future);
+            if (guard != null) {
+                guard.cancel(false);
+            }
+        });
         return future;
     }
 
@@ -337,20 +509,19 @@ public class ComfyMcpClient implements AutoCloseable {
     }
 
     private void writeJson(Map<String, Object> payload) {
-        if (closed.get()) {
-            throw new ComfyException("comfy mcp client is closed");
-        }
+        ensureTransportOpen();
         String line;
         try {
             line = mapper.writeValueAsString(payload);
         } catch (Exception e) {
             throw new ComfyException("comfy mcp RPC serialization failed", e);
         }
-        PrintWriter writer = stdin;
-        if (writer == null) {
-            throw new ComfyException("comfy mcp client is not connected");
-        }
-        synchronized (this) {
+
+        synchronized (writeLock) {
+            PrintWriter writer = stdin;
+            if (writer == null) {
+                throw new ComfyException("comfy mcp client is not connected");
+            }
             writer.println(line);
             if (writer.checkError()) {
                 throw new ComfyException("comfy mcp stdin write failed (server exited?)");
@@ -358,31 +529,67 @@ public class ComfyMcpClient implements AutoCloseable {
         }
     }
 
-    private void readLoop() {
-        try (BufferedReader reader =
-                new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
+    private void readLoop(Process child) {
+        try (Reader reader = new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8)) {
+            String frame;
+            while ((frame = readBoundedLine(reader)) != null) {
                 if (closed.get()) {
                     return;
                 }
-                if (line.trim().isEmpty()) {
+                if (frame.trim().isEmpty()) {
                     continue;
                 }
-                if (line.length() > effectiveMaxFrameChars()) {
-                    log.warn("comfy mcp frame over cap, tearing transport down");
-                    failAllPending(new ComfyException(
-                            "comfy mcp frame exceeded maxFrameChars=" + config.getMaxFrameChars()));
-                    process.destroy();
-                    return;
-                }
-                handleFrame(line);
+                handleFrame(frame);
             }
-            failAllPending(new ComfyException("comfy mcp stdout closed (server exited)"));
+            if (!closed.get() && process == child) {
+                failAllPending(new ComfyException("comfy mcp stdout closed (server exited)"));
+            }
+        } catch (FrameTooLargeException e) {
+            failAllPending(new ComfyException(
+                    "comfy mcp frame exceeded maxFrameChars=" + config.getMaxFrameChars(), e));
+            child.destroy();
         } catch (IOException e) {
-            if (!closed.get()) {
+            if (!closed.get() && process == child) {
                 failAllPending(new ComfyException("comfy mcp stdout read failed", e));
             }
+        }
+    }
+
+    /** Drains stderr without logging content, because child logs may contain secrets/paths. */
+    private void drainStderr(Process child) {
+        long chars = 0L;
+        try (Reader reader = new InputStreamReader(child.getErrorStream(), StandardCharsets.UTF_8)) {
+            char[] buffer = new char[4096];
+            int n;
+            while ((n = reader.read(buffer)) >= 0) {
+                chars += n;
+            }
+        } catch (IOException e) {
+            if (!closed.get() && process == child) {
+                log.debug("comfy-mcp stderr drain ended with {}", e.getClass().getSimpleName());
+            }
+        }
+        log.debug("comfy-mcp stderr drained chars={}", chars);
+    }
+
+    private String readBoundedLine(Reader reader) throws IOException {
+        StringBuilder line = new StringBuilder();
+        int max = config.getMaxFrameChars() <= 0 ? Integer.MAX_VALUE : config.getMaxFrameChars();
+        for (;;) {
+            int ch = reader.read();
+            if (ch < 0) {
+                return line.length() == 0 ? null : line.toString();
+            }
+            if (ch == '\n') {
+                return line.toString();
+            }
+            if (ch == '\r') {
+                continue;
+            }
+            if (line.length() >= max) {
+                throw new FrameTooLargeException();
+            }
+            line.append((char) ch);
         }
     }
 
@@ -390,12 +597,14 @@ public class ComfyMcpClient implements AutoCloseable {
         JsonNode node;
         try {
             node = mapper.readTree(frame);
-        } catch (Exception ex) {
-            log.warn("Ignored non-JSON frame from comfy mcp");
+        } catch (Exception e) {
+            log.warn("Ignored non-JSON frame from comfy-mcp");
             return;
         }
+
         if (node.hasNonNull("id")) {
-            CompletableFuture<JsonNode> pending = pendingRpcs.remove(Long.valueOf(node.get("id").asLong()));
+            Long id = Long.valueOf(node.get("id").asLong());
+            CompletableFuture<JsonNode> pending = pendingRpcs.remove(id);
             if (pending == null) {
                 return;
             }
@@ -407,48 +616,181 @@ public class ComfyMcpClient implements AutoCloseable {
             }
             return;
         }
-        log.debug("Ignored comfy mcp notification: method={}", node.path("method").asText(""));
+        log.debug("Ignored comfy-mcp notification: method={}", node.path("method").asText(""));
     }
 
-    private void scheduleTimeout(CompletableFuture<?> future, long timeoutMillis, String what) {
-        if (timeoutMillis <= 0) {
-            return;
+    private ComfyMcpCallResult toCallResult(JsonNode result) {
+        StringBuilder text = new StringBuilder();
+        List<ComfyMcpContent> contents = new ArrayList<ComfyMcpContent>();
+        int cap = config.getMaxContentChars() <= 0 ? Integer.MAX_VALUE : config.getMaxContentChars();
+        boolean truncated = false;
+
+        for (JsonNode content : result.path("content")) {
+            String type = content.path("type").asText("");
+            String piece = content.hasNonNull("text") ? content.path("text").asText() : null;
+            contents.add(new ComfyMcpContent(
+                    type,
+                    piece,
+                    content.hasNonNull("mimeType") ? content.path("mimeType").asText() : null,
+                    content.hasNonNull("data") ? content.path("data").asText() : null,
+                    content.hasNonNull("uri") ? content.path("uri").asText() : null,
+                    content));
+
+            if (piece == null || !"text".equals(type)) {
+                continue;
+            }
+            int remaining = cap - text.length();
+            if (remaining <= 0) {
+                truncated = true;
+                continue;
+            }
+            if (piece.length() > remaining) {
+                text.append(piece, 0, remaining);
+                truncated = true;
+            } else {
+                text.append(piece);
+            }
         }
-        java.util.concurrent.ScheduledFuture<?> guard = timer.schedule(() -> future
-                .completeExceptionally(new ComfyException("comfy mcp " + what + " timed out after "
-                        + timeoutMillis + " ms")), timeoutMillis, TimeUnit.MILLISECONDS);
-        future.whenComplete((r, error) -> guard.cancel(false));
+
+        return new ComfyMcpCallResult(
+                text.toString(),
+                result.path("isError").asBoolean(false),
+                result,
+                contents,
+                truncated);
     }
 
-    private JsonNode await(CompletableFuture<JsonNode> future, long timeoutMillis, String what) {
-        scheduleTimeout(future, timeoutMillis, what);
+    private JsonNode await(CompletableFuture<JsonNode> future, String what) {
         try {
             return future.get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ComfyException("comfy mcp " + what + " interrupted", e);
         } catch (ExecutionException e) {
-            Throwable cause = e.getCause() == null ? e : e.getCause();
-            if (cause instanceof ComfyException) {
-                throw (ComfyException) cause;
-            }
-            if (cause instanceof RuntimeException) {
-                throw (RuntimeException) cause;
-            }
-            throw new ComfyException("comfy mcp " + what + " failed", cause);
+            throw propagate("comfy mcp " + what + " failed", e.getCause());
         }
+    }
+
+    private ComfyMcpCallResult awaitCall(CompletableFuture<ComfyMcpCallResult> future, String what) {
+        try {
+            return future.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ComfyException("comfy mcp " + what + " interrupted", e);
+        } catch (ExecutionException e) {
+            throw propagate("comfy mcp " + what + " failed", e.getCause());
+        }
+    }
+
+    private RuntimeException propagate(String message, Throwable cause) {
+        Throwable actual = cause == null ? new ComfyException(message) : cause;
+        if (actual instanceof ComfyException) {
+            return (ComfyException) actual;
+        }
+        if (actual instanceof RuntimeException) {
+            return (RuntimeException) actual;
+        }
+        return new ComfyException(message, actual);
     }
 
     private void failAllPending(ComfyException error) {
         for (Map.Entry<Long, CompletableFuture<JsonNode>> entry : pendingRpcs.entrySet()) {
-            CompletableFuture<JsonNode> future = pendingRpcs.remove(entry.getKey());
-            if (future != null) {
-                future.completeExceptionally(error);
+            if (pendingRpcs.remove(entry.getKey(), entry.getValue())) {
+                entry.getValue().completeExceptionally(error);
             }
         }
     }
 
-    private int effectiveMaxFrameChars() {
-        return config.getMaxFrameChars() <= 0 ? Integer.MAX_VALUE : config.getMaxFrameChars();
+    private synchronized void cleanupTransport() {
+        initialized.set(false);
+
+        PrintWriter writer = stdin;
+        stdin = null;
+        if (writer != null) {
+            writer.close();
+        }
+
+        Process child = process;
+        process = null;
+        if (child != null) {
+            child.destroy();
+            try {
+                if (config.getShutdownTimeoutMillis() > 0
+                        && !child.waitFor(config.getShutdownTimeoutMillis(), TimeUnit.MILLISECONDS)) {
+                    child.destroyForcibly();
+                    child.waitFor(config.getShutdownTimeoutMillis(), TimeUnit.MILLISECONDS);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                child.destroyForcibly();
+            }
+        }
+
+        Thread out = stdoutThread;
+        Thread err = stderrThread;
+        stdoutThread = null;
+        stderrThread = null;
+        interruptAndJoin(out);
+        interruptAndJoin(err);
+    }
+
+    private void interruptAndJoin(Thread thread) {
+        if (thread == null || thread == Thread.currentThread()) {
+            return;
+        }
+        thread.interrupt();
+        try {
+            thread.join(Math.max(100L, config.getShutdownTimeoutMillis()));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void ensureConnected() {
+        if (closed.get()) {
+            throw new IllegalStateException("comfy mcp client is closed");
+        }
+        if (!initialized.get()) {
+            throw new IllegalStateException("comfy mcp client is not connected");
+        }
+        ensureTransportOpen();
+    }
+
+    private void ensureTransportOpen() {
+        if (closed.get()) {
+            throw new ComfyException("comfy mcp client is closed");
+        }
+        Process child = process;
+        if (child == null || stdin == null) {
+            throw new ComfyException("comfy mcp client is not connected");
+        }
+    }
+
+    private static Thread daemon(String name, Runnable task) {
+        Thread thread = new Thread(task, name);
+        thread.setDaemon(true);
+        return thread;
+    }
+
+    private static Map<String, Object> params(Object... keyValues) {
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        for (int i = 0; i + 1 < keyValues.length; i += 2) {
+            result.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+        }
+        return result;
+    }
+
+    private static void putIfNotNull(Map<String, Object> target, String key, Object value) {
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static final class FrameTooLargeException extends IOException {
+        private static final long serialVersionUID = 1L;
     }
 }
