@@ -23,14 +23,25 @@ import io.github.easy4j.comfy.ComfyClientConfig;
 public class ComfyCli {
 
     private final ComfyCliExecutor executor;
+    private final ComfyCliStreamExecutor streamExecutor;
     private final ComfyClientConfig config;
 
     public ComfyCli(ComfyClientConfig config, ComfyCliExecutor executor) {
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.streamExecutor = new ComfyCliStreamExecutor(config);
     }
 
     public ComfyCliExecutor executor() { return executor; }
+    public ComfyCliStreamExecutor streamExecutor() { return streamExecutor; }
+    public ComfyCliStreamSession stream(ComfyCliStreamListener listener, String... args) {
+        return streamExecutor.execute(listener, args);
+    }
+    public ComfyCliStreamSession runStream(RunOptions options, ComfyCliStreamListener listener) {
+        Objects.requireNonNull(options, "options");
+        return streamExecutor.execute(listener,
+                options.toArgs(config.getDefaultWhere()).toArray(new String[0]));
+    }
 
     public ComfyCliResult version() { return executor.execute("--version"); }
     public ComfyCliResult help() { return executor.execute("--help"); }
@@ -72,6 +83,24 @@ public class ComfyCli {
     public ComfyCliResult update(String... args) { return prefixed("update", args); }
     public ComfyCliResult which() { return executor.execute("which"); }
     public ComfyCliResult env() { return executor.execute("env"); }
+
+
+    public ComfyCliResult outdated(String... args) { return prefixed("outdated", args); }
+    public ComfyCliResult logs(String... args) { return prefixed("logs", args); }
+    public ComfyCliResult systemStats(String... args) { return prefixed("system-stats", args); }
+    public ComfyCliResult free(String... args) { return prefixed("free", args); }
+    public ComfyCliResult runCli(String... args) { return prefixed("run-cli", args); }
+    public ComfyCliResult agentReview(String... args) { return prefixed("agent-review", args); }
+    public ComfyCliResult dependency(String... args) { return prefixed("dependency", args); }
+    public ComfyCliResult cloudStatus(String... args) { return prefixed2("cloud", "status", args); }
+    public ComfyCliResult cloudLogin(String... args) { return prefixed2("cloud", "login", args); }
+    public ComfyCliResult cloudSetKey(String key) {
+        return executor.execute("cloud", "set-key", "--key", requireNonBlank("key", key));
+    }
+    public ComfyCliResult cloudClearBaseUrl() {
+        return executor.execute("cloud", "set-base-url", "--clear");
+    }
+    public ComfyCliResult setDefault(String... args) { return prefixed("set-default", args); }
 
     public ComfyCliResult generate(String model, GenerateOptions options) {
         Objects.requireNonNull(model, "model");
@@ -323,12 +352,14 @@ public class ComfyCli {
     public static class SetupOptions {
         private String where;
         private String projectDir;
+        private String apiKey;
         private boolean nonInteractive;
         private boolean skipSkills;
         private boolean skipVerify;
 
         public SetupOptions where(String value) { this.where = requireWhere(value); return this; }
         public SetupOptions projectDir(String value) { this.projectDir = value; return this; }
+        public SetupOptions apiKey(String value) { this.apiKey = requireNonBlank("apiKey", value); return this; }
         public SetupOptions nonInteractive(boolean value) { this.nonInteractive = value; return this; }
         public SetupOptions skipSkills(boolean value) { this.skipSkills = value; return this; }
         public SetupOptions skipVerify(boolean value) { this.skipVerify = value; return this; }
@@ -337,6 +368,7 @@ public class ComfyCli {
             List<String> args = words("setup");
             option(args, "--where", where);
             option(args, "--project-dir", projectDir);
+            option(args, "--api-key", apiKey);
             if (nonInteractive) args.add("--non-interactive");
             if (skipSkills) args.add("--skip-skills");
             if (skipVerify) args.add("--skip-verify");
@@ -348,6 +380,17 @@ public class ComfyCli {
         private String workflowPath;
         private Boolean wait;
         private String where;
+        private String prompt;
+        private final List<String> setOverrides = new ArrayList<String>();
+        private Boolean notify;
+        private boolean verbose;
+        private String host;
+        private Integer port;
+        private Integer timeoutSeconds;
+        private boolean printPrompt;
+        private String workflowId;
+        private boolean noWatch;
+        private boolean allowSpend;
         private boolean json;
         private boolean jsonStream;
 
@@ -355,6 +398,17 @@ public class ComfyCli {
             this.workflowPath = requireNonBlank("workflowPath", workflowPath);
         }
         public RunOptions wait(boolean value) { this.wait = Boolean.valueOf(value); return this; }
+        public RunOptions prompt(String value) { this.prompt = value; return this; }
+        public RunOptions set(String value) { this.setOverrides.add(requireNonBlank("set", value)); return this; }
+        public RunOptions notify(boolean value) { this.notify = Boolean.valueOf(value); return this; }
+        public RunOptions verbose(boolean value) { this.verbose = value; return this; }
+        public RunOptions host(String value) { this.host = value; return this; }
+        public RunOptions port(int value) { this.port = Integer.valueOf(value); return this; }
+        public RunOptions timeoutSeconds(int value) { this.timeoutSeconds = Integer.valueOf(value); return this; }
+        public RunOptions printPrompt(boolean value) { this.printPrompt = value; return this; }
+        public RunOptions workflowId(String value) { this.workflowId = value; return this; }
+        public RunOptions noWatch(boolean value) { this.noWatch = value; return this; }
+        public RunOptions allowSpend(boolean value) { this.allowSpend = value; return this; }
         public RunOptions where(String value) { this.where = value == null ? null : requireWhere(value); return this; }
         public RunOptions json(boolean value) { this.json = value; return this; }
         public RunOptions jsonStream(boolean value) { this.jsonStream = value; return this; }
@@ -364,9 +418,25 @@ public class ComfyCli {
             if (json) args.add("--json");
             if (jsonStream) args.add("--json-stream");
             args.add("run");
-            args.add("--workflow");
-            args.add(workflowPath);
+            if (workflowPath != null) {
+                args.add("--workflow");
+                args.add(workflowPath);
+            }
+            option(args, "--prompt", prompt);
+            for (String override : setOverrides) {
+                args.add("--set");
+                args.add(override);
+            }
             if (Boolean.TRUE.equals(wait)) args.add("--wait");
+            if (notify != null) args.add(notify.booleanValue() ? "--notify" : "--no-notify");
+            if (verbose) args.add("--verbose");
+            option(args, "--host", host);
+            if (port != null) { args.add("--port"); args.add(String.valueOf(port)); }
+            if (timeoutSeconds != null) { args.add("--timeout"); args.add(String.valueOf(timeoutSeconds)); }
+            if (printPrompt) args.add("--print-prompt");
+            option(args, "--workflow-id", workflowId);
+            if (noWatch) args.add("--no-watch");
+            if (allowSpend) args.add("--allow-spend");
             String route = where != null ? where : defaultWhere;
             if (route != null) {
                 args.add("--where");

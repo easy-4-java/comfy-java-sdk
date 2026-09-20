@@ -69,6 +69,13 @@ class ComfyCliParityTest {
         assertTrue(cli.project("status").getStdout().contains("project status"));
         assertTrue(cli.assets("status").getStdout().contains("assets status"));
         assertTrue(cli.agent("--help").getStdout().contains("agent --help"));
+        assertTrue(cli.outdated("--refresh").getStdout().contains("outdated --refresh"));
+        assertTrue(cli.logs("--tail", "50").getStdout().contains("logs --tail 50"));
+        assertTrue(cli.systemStats("--where", "local").getStdout().contains("system-stats --where local"));
+        assertTrue(cli.free("--free-memory").getStdout().contains("free --free-memory"));
+        assertTrue(cli.runCli().getStdout().contains("run-cli"));
+        assertTrue(cli.agentReview("ok").getStdout().contains("agent-review ok"));
+        assertTrue(cli.dependency().getStdout().contains("dependency"));
     }
 
     @Test

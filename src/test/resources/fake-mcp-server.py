@@ -67,9 +67,16 @@ def main():
             elif name == "hang":
                 # Intentionally leave the request unanswered to exercise timeout cleanup.
                 continue
-            else:
+            elif name == "notification_test":
+                send({"jsonrpc": "2.0", "method": "notifications/progress",
+                      "params": {"progress": 0.5}})
+                reply(req_id, {"content": [{"type": "text", "text": "ok"}], "isError": False})
+            elif name == "nope":
                 reply(req_id, {"content": [{"type": "text", "text": "unknown tool: " + name}],
                                "isError": True})
+            else:
+                reply(req_id, {"content": [{"type": "text", "text": json.dumps(args, sort_keys=True)}],
+                               "isError": False})
         elif req_id is not None:
             send({"jsonrpc": "2.0", "id": req_id,
                   "error": {"code": -32601, "message": "method not found: " + method}})

@@ -76,6 +76,23 @@ class ComfyMcpHardeningTest {
     }
 
     @Test
+    void notificationsMustBeSurfaced() {
+        try (ComfyMcpClient client = new ComfyMcpClient(config())) {
+            final java.util.List<ComfyMcpNotification> seen =
+                    new java.util.ArrayList<ComfyMcpNotification>();
+            client.addListener(new ComfyMcpListener() {
+                @Override public void onNotification(ComfyMcpNotification notification) {
+                    seen.add(notification);
+                }
+            });
+            client.connect();
+            assertFalse(client.callTool("notification_test", null).isError());
+            assertEquals(1, seen.size());
+            assertEquals("notifications/progress", seen.get(0).getMethod());
+        }
+    }
+
+    @Test
     void nonTextMcpContentMustRemainStructured() {
         try (ComfyMcpClient client = new ComfyMcpClient(config())) {
             client.connect();
