@@ -108,11 +108,12 @@ public class ComfyMcpClient implements AutoCloseable {
         Process child = null;
         try {
             child = builder.start();
-            process = child;
-            stdin = new PrintWriter(new OutputStreamWriter(child.getOutputStream(), StandardCharsets.UTF_8), true);
+            final Process connectedChild = child;
+            process = connectedChild;
+            stdin = new PrintWriter(new OutputStreamWriter(connectedChild.getOutputStream(), StandardCharsets.UTF_8), true);
 
-            stdoutReader = daemon("comfy-mcp-reader", () -> readLoop(child));
-            stderrReader = daemon("comfy-mcp-stderr", () -> drainStderr(child));
+            stdoutReader = daemon("comfy-mcp-reader", () -> readLoop(connectedChild));
+            stderrReader = daemon("comfy-mcp-stderr", () -> drainStderr(connectedChild));
             stdoutReader.start();
             stderrReader.start();
 
