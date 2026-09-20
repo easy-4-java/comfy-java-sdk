@@ -71,6 +71,15 @@ def main():
                 send({"jsonrpc": "2.0", "method": "notifications/progress",
                       "params": {"progress": 0.5}})
                 reply(req_id, {"content": [{"type": "text", "text": "ok"}], "isError": False})
+            elif name == "elicitation_test":
+                send({"jsonrpc": "2.0", "id": 9001, "method": "elicitation/create",
+                      "params": {"message": "confirm"}})
+                response = json.loads(sys.stdin.readline())
+                accepted = bool((response.get("result") or {}).get("accepted"))
+                reply(req_id, {"content": [{"type": "text", "text": "accepted=" + str(accepted).lower()}],
+                               "isError": False})
+            elif name == "die":
+                sys.exit(0)
             elif name == "nope":
                 reply(req_id, {"content": [{"type": "text", "text": "unknown tool: " + name}],
                                "isError": True})

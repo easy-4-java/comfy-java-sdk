@@ -93,6 +93,44 @@ class ComfyMcpHardeningTest {
     }
 
     @Test
+    void elicitationShouldBeHandledOnlyWhenConfigured() {
+        try (ComfyMcpClient client = new ComfyMcpClient(config())) {
+            client.setElicitationHandler(new ComfyMcpElicitationHandler() {
+                @Override public Object handle(String method, com.fasterxml.jackson.databind.JsonNode params) {
+                    Map<String, Object> result = new LinkedHashMap<String, Object>();
+                    result.put("accepted", Boolean.TRUE);
+                    return result;
+                }
+            });
+            client.connect();
+            ComfyMcpCallResult result = client.callTool("elicitation_test", null);
+            assertFalse(result.isError());
+            assertTrue(result.getText().contains("accepted=true"));
+        }
+    }
+
+    @Test
+    void unexpectedChildExitShouldResetStateAndAllowReconnect() {
+        ComfyMcpClient client = new ComfyMcpClient(config());
+        try {
+            client.connect();
+            assertThrows(ComfyException.class, () -> client.callTool("die", null));
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+            while (client.isConnected() && System.nanoTime() < deadline) {
+                try { Thread.sleep(10L); } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            assertFalse(client.isConnected());
+            assertEquals("0.0.0-test", client.connect());
+            assertTrue(client.isConnected());
+        } finally {
+            client.close();
+        }
+    }
+
+    @Test
     void nonTextMcpContentMustRemainStructured() {
         try (ComfyMcpClient client = new ComfyMcpClient(config())) {
             client.connect();

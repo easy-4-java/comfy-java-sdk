@@ -394,8 +394,15 @@ public class ComfyCli {
         private boolean json;
         private boolean jsonStream;
 
+        public RunOptions() { }
+
         public RunOptions(String workflowPath) {
             this.workflowPath = requireNonBlank("workflowPath", workflowPath);
+        }
+
+        public RunOptions workflow(String value) {
+            this.workflowPath = value == null ? null : requireNonBlank("workflowPath", value);
+            return this;
         }
         public RunOptions wait(boolean value) { this.wait = Boolean.valueOf(value); return this; }
         public RunOptions prompt(String value) { this.prompt = value; return this; }
@@ -414,6 +421,12 @@ public class ComfyCli {
         public RunOptions jsonStream(boolean value) { this.jsonStream = value; return this; }
 
         List<String> toArgs(String defaultWhere) {
+            if (workflowPath != null && prompt != null) {
+                throw new IllegalStateException("run workflow and prompt are mutually exclusive");
+            }
+            if (workflowPath == null && (prompt == null || prompt.trim().isEmpty())) {
+                throw new IllegalStateException("run requires workflow or prompt");
+            }
             List<String> args = new ArrayList<String>();
             if (json) args.add("--json");
             if (jsonStream) args.add("--json-stream");
