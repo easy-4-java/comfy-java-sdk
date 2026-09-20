@@ -1,162 +1,146 @@
 /*
- * Copyright (c) 2018-present, easy-4-java (https://github.com/easy-4-java).
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2018-present, easy-4-java.
  */
 package io.github.easy4j.comfy.cli;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.file.Paths;
 
 import org.junit.jupiter.api.Test;
 
 import io.github.easy4j.comfy.ComfyClientConfig;
 
-/**
- * Contract tests for {@link ComfyCli} driven without a socket: outgoing
- * argument lists are verified through the echo fixture.
- *
- * @since 1.0.0
- */
 class ComfyCliTest {
 
-    /** Absolute path of the argument-echoing fixture script (surefire runs from the module base dir). */
     private static final String ECHO =
-            java.nio.file.Paths.get("src", "test", "resources", "comfy-echo.sh").toAbsolutePath().toString();
+            Paths.get("src", "test", "resources", "comfy-echo.sh").toAbsolutePath().toString();
 
-    private static ComfyClientConfig echoConfig() {
+    private static ComfyCli cli() {
         ComfyClientConfig config = new ComfyClientConfig();
         config.setLocalExecutable(ECHO);
         config.setLocalTimeoutSeconds(2);
-        return config;
-    }
-
-    private static ComfyCli echoCli() {
-        return new ComfyCli(echoConfig(), new ComfyCliExecutor(echoConfig()));
+        return new ComfyCli(config, new ComfyCliExecutor(config));
     }
 
     @Test
-    void shouldExposeExecutor() {
-        assertNotNull(echoCli().executor());
+    void shouldMapGlobalAndEnvironmentCommands() {
+        assertTrue(cli().discoverJson().getStdout().contains("--json discover"));
+        assertTrue(cli().executeJsonStream("jobs", "watch", "p1").getStdout()
+                .contains("--json-stream jobs watch p1"));
+        assertTrue(cli().which().getStdout().contains("which"));
+        assertTrue(cli().env().getStdout().contains("env"));
+        assertTrue(cli().outdated().getStdout().contains("outdated"));
+        assertTrue(cli().systemStats().getStdout().contains("system-stats"));
+        assertTrue(cli().freeMemory().getStdout().contains("free-memory"));
     }
 
     @Test
-    void shouldDelegateVersionAndHelp() {
-        assertTrue(echoCli().version().getStdout().contains("--version"));
-        assertTrue(echoCli().help().getStdout().contains("--help"));
-        assertTrue(echoCli().installCompletion().getStdout().contains("--install-completion"));
-        assertTrue(echoCli().discoverJson().getStdout().contains("--json discover"));
+    void shouldMapSetupCloudAndRouting() {
+        assertTrue(cli().setupYes().getStdout().contains("setup -y"));
+        assertTrue(cli().cloudLoginNoBrowser().getStdout().contains("cloud login --no-browser"));
+        assertTrue(cli().cloudWhoami().getStdout().contains("cloud whoami"));
+        assertTrue(cli().cloudLogout().getStdout().contains("cloud logout"));
+        assertTrue(cli().cloudStatus().getStdout().contains("cloud status"));
+        assertTrue(cli().cloudSetBaseUrl("https://example.test").getStdout()
+                .contains("cloud set-base-url https://example.test"));
+        assertTrue(cli().setDefaultWhere("local").getStdout().contains("set-default --where local"));
+        assertThrows(IllegalArgumentException.class, () -> cli().setDefaultWhere("bogus"));
     }
 
     @Test
-    void shouldDelegateSetupAndCloudAuth() {
-        assertTrue(echoCli().setup().getStdout().contains("setup"));
-        assertTrue(echoCli().setupYes().getStdout().contains("-y"));
-        assertTrue(echoCli().cloudLogin().getStdout().contains("cloud login"));
-        assertTrue(echoCli().cloudWhoami().getStdout().contains("cloud whoami"));
+    void shouldMapLifecycle() {
+        assertTrue(cli().install("--here").getStdout().contains("install --here"));
+        assertTrue(cli().launchBackground("--port", "8188").getStdout()
+                .contains("launch --background --port 8188"));
+        assertTrue(cli().stop().getStdout().contains("stop"));
+        assertTrue(cli().update("comfy").getStdout().contains("update comfy"));
+        assertTrue(cli().logs("--tail", "20").getStdout().contains("logs --tail 20"));
     }
 
     @Test
-    void shouldDelegateSetDefaultWhere() {
-        assertTrue(echoCli().setDefaultWhere("cloud").getStdout().contains("--where cloud"));
-        assertThrows(IllegalArgumentException.class, () -> echoCli().setDefaultWhere("bogus"));
-    }
-
-    @Test
-    void shouldDelegateComfyUiLifecycle() {
-        assertTrue(echoCli().install("--here").getStdout().contains("install --here"));
-        assertTrue(echoCli().launch("--port", "8188").getStdout().contains("launch --port 8188"));
-        assertTrue(echoCli().stop().getStdout().contains("stop"));
-        assertTrue(echoCli().update().getStdout().contains("update"));
-    }
-
-    @Test
-    void shouldBuildGenerateWithAllFlags() {
+    void shouldBuildGenerationAndValidateDynamicOptions() {
         ComfyCli.GenerateOptions options = new ComfyCli.GenerateOptions()
-                .prompt("a cat on the moon")
-                .width(1024).height(1024)
-                .download("cat.png")
-                .image("in.png").mask("mask.png")
-                .resolution("1080p").duration(5).aspectRatio("16:9")
-                .renderingSpeed("quality")
-                .async(true).json(true)
-                .where("cloud");
+                .prompt("a cat")
+                .width(1024).height(768)
+                .duration(5)
+                .timeoutSeconds(90)
+                .where("cloud")
+                .option("seed", 42)
+                .flag("enhance-prompt");
 
-        ComfyCliResult result = echoCli().generate("flux-pro", options);
-        String out = result.getStdout();
+        String out = cli().generate("flux-pro", options).getStdout();
         assertTrue(out.contains("generate flux-pro"));
-        assertTrue(out.contains("--prompt a cat on the moon"));
+        assertTrue(out.contains("--prompt a cat"));
         assertTrue(out.contains("--width 1024"));
-        assertTrue(out.contains("--height 1024"));
-        assertTrue(out.contains("--download cat.png"));
-        assertTrue(out.contains("--image in.png"));
-        assertTrue(out.contains("--mask mask.png"));
-        assertTrue(out.contains("--resolution 1080p"));
-        assertTrue(out.contains("--duration 5"));
-        assertTrue(out.contains("--aspect_ratio 16:9"));
-        assertTrue(out.contains("--rendering_speed quality"));
-        assertTrue(out.contains("--async"));
-        assertTrue(out.contains("--json"));
-        assertTrue(out.contains("--where cloud"), "explicit where must be appended");
+        assertTrue(out.contains("--timeout 90"));
+        assertTrue(out.contains("--seed 42"));
+        assertTrue(out.contains("--enhance-prompt"));
+        assertTrue(out.contains("--where cloud"));
+
+        assertThrows(IllegalArgumentException.class, () -> new ComfyCli.GenerateOptions().where("x"));
+        assertThrows(IllegalArgumentException.class, () -> new ComfyCli.GenerateOptions().option("bad flag", 1));
     }
 
     @Test
-    void shouldPropagateConfigDefaultWhere() {
-        ComfyClientConfig config = echoConfig();
-        config.setDefaultWhere("local");
-        ComfyCliResult result = new ComfyCli(config, new ComfyCliExecutor(config))
-                .generate("seedance", new ComfyCli.GenerateOptions().prompt("hi").where(null));
-        assertTrue(result.getStdout().contains("--where local"));
+    void shouldMapWorkflowJobAndTemplateCommands() {
+        assertTrue(cli().runWorkflow("wf.json", true).getStdout()
+                .contains("run --workflow wf.json --wait"));
+        assertTrue(cli().jobsList().getStdout().contains("jobs ls"));
+        assertTrue(cli().jobStatus("p1").getStdout().contains("jobs status p1"));
+        assertTrue(cli().jobsWait("p1", "p2").getStdout().contains("jobs wait p1 p2"));
+        assertTrue(cli().jobCancel("p1").getStdout().contains("jobs cancel p1"));
+        assertTrue(cli().validateWorkflow("wf.json").getStdout()
+                .contains("validate --workflow wf.json"));
+        assertTrue(cli().templatesList("image", "Text to Image").getStdout()
+                .contains("templates ls --type image --tag Text to Image"));
+        assertTrue(cli().templateFetch("basic", "out.json").getStdout()
+                .contains("templates fetch basic --out out.json"));
     }
 
     @Test
-    void shouldRejectNullModelAndOptions() {
-        assertThrows(NullPointerException.class, () -> echoCli().generate(null, new ComfyCli.GenerateOptions()));
-        assertThrows(NullPointerException.class, () -> echoCli().generate("flux-pro", null));
+    void shouldMapWorkflowEditing() {
+        assertTrue(cli().workflowSlots("wf.json").getStdout().contains("workflow slots wf.json"));
+        assertTrue(cli().workflowSetSlot("wf.json", "6.text=a fox").getStdout()
+                .contains("workflow set-slot wf.json 6.text=a fox"));
+        assertTrue(cli().workflowVary("wf.json", "variants", "6.seed=[1,2]").getStdout()
+                .contains("workflow vary wf.json --slot 6.seed=[1,2] --out-dir variants"));
+        assertTrue(cli().workflowList().getStdout().contains("workflow list"));
+        assertTrue(cli().workflowGet("id1", "wf.json").getStdout()
+                .contains("workflow get id1 --out wf.json"));
+        assertTrue(cli().workflowSave("wf.json", "My Flow").getStdout()
+                .contains("workflow save wf.json --name My Flow"));
+        assertTrue(cli().workflowDelete("id1").getStdout().contains("workflow delete id1"));
+        assertTrue(cli().workflowCompose("pipe.yaml", "wf.json").getStdout()
+                .contains("workflow compose pipe.yaml -o wf.json"));
+        assertTrue(cli().workflowDecompose("wf.json").getStdout()
+                .contains("workflow decompose wf.json"));
     }
 
     @Test
-    void shouldDelegateGenerateVariants() {
-        assertTrue(echoCli().generateList("text-to-video", "kling").getStdout()
-                .contains("--category text-to-video --partner kling"));
-        assertTrue(echoCli().generateSchema("flux-kontext").getStdout().contains("schema flux-kontext"));
-        assertTrue(echoCli().generateUpload("in.png").getStdout().contains("upload in.png"));
-        String resume = echoCli().generateResume("luma", "job-1", "out.mp4").getStdout();
-        assertTrue(resume.contains("resume luma job-1 --download out.mp4"));
+    void shouldMapDiscoveryAssetsAndManagementFamilies() {
+        assertTrue(cli().nodesSearch("checkpoint").getStdout().contains("nodes search checkpoint"));
+        assertTrue(cli().nodeShow("KSampler").getStdout().contains("nodes show KSampler"));
+        assertTrue(cli().modelFolders().getStdout().contains("models list-folders"));
+        assertTrue(cli().modelsSearch("wan", "lora").getStdout()
+                .contains("models search --text wan --type lora"));
+        assertTrue(cli().nodeInstall("pack").getStdout().contains("node install pack"));
+        assertTrue(cli().modelDownload("https://example/model", "models/checkpoints").getStdout()
+                .contains("model download --url https://example/model --relative-path models/checkpoints"));
+        assertTrue(cli().upload("a.png", "b.png").getStdout().contains("upload a.png b.png"));
+        assertTrue(cli().download("p1", "-o", "outputs").getStdout()
+                .contains("download p1 -o outputs"));
     }
 
     @Test
-    void shouldDelegateWorkflowAndDiscovery() {
-        assertTrue(echoCli().run("--workflow", "a.json").getStdout().contains("run --workflow a.json"));
-        assertTrue(echoCli().jobs().getStdout().contains("jobs"));
-        assertTrue(echoCli().validate("wf.json").getStdout().contains("validate wf.json"));
-        assertTrue(echoCli().workflow("list").getStdout().contains("workflow list"));
-        assertTrue(echoCli().templates().getStdout().contains("templates"));
-        assertTrue(echoCli().nodes("search").getStdout().contains("nodes search"));
-        assertTrue(echoCli().models("list").getStdout().contains("models list"));
-    }
-
-    @Test
-    void shouldDelegateSkills() {
-        assertTrue(echoCli().skillsInstall().getStdout().contains("skills install"));
-        assertTrue(echoCli().skillsList().getStdout().contains("skills list"));
-        assertTrue(echoCli().skillsStatus().getStdout().contains("skills status"));
-    }
-
-    @Test
-    void shouldDelegateRawExecute() {
-        assertTrue(echoCli().execute("--version").getStdout().contains("--version"));
+    void shouldMapSkillsAndTrackingAndKeepEscapeHatch() {
+        assertTrue(cli().skillsInstall().getStdout().contains("skills install"));
+        assertTrue(cli().skillsList().getStdout().contains("skills list"));
+        assertTrue(cli().skillsStatus().getStdout().contains("skills status"));
+        assertTrue(cli().trackingDisable().getStdout().contains("tracking disable"));
+        assertTrue(cli().trackingEnable().getStdout().contains("tracking enable"));
+        assertTrue(cli().execute("future-command", "--x").getStdout()
+                .contains("future-command --x"));
     }
 }
