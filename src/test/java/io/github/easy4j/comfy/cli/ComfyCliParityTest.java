@@ -107,6 +107,15 @@ class ComfyCliParityTest {
     }
 
     @Test
+    void runOptionsShouldSupportPromptOnlyAndRejectPromptWorkflowConflict() {
+        String promptOnly = cli().run(new ComfyCli.RunOptions().prompt("a cat").noWatch(true))
+                .getStdout();
+        assertTrue(promptOnly.contains("run --prompt a cat --no-watch"));
+        assertThrows(IllegalStateException.class,
+                () -> cli().run(new ComfyCli.RunOptions("wf.json").prompt("cat")));
+    }
+
+    @Test
     void copiedGenerateOptionsMustBeIndependent() {
         ComfyCli.GenerateOptions original = new ComfyCli.GenerateOptions().prompt("cat").param("quality", "high");
         ComfyCli.GenerateOptions copy = new ComfyCli.GenerateOptions(original).json(true).param("quality", "low");
