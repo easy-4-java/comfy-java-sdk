@@ -13,7 +13,7 @@ extract_branch() {
   git archive --format=tar "$ref" src/main/java src/test/java src/test/resources     | tar -xf - -C "$TMP/$dir"
 
   find "$TMP/$dir" -type f -name '*.java' -print | while IFS= read -r file; do
-    sed       -e 's/tools\.jackson/com.fasterxml.jackson/g'       -e 's/\.properties()/\.fields()/g'       "$file" > "$file.norm"
+    sed       -e 's/tools\.jackson/com.fasterxml.jackson/g'       -e 's/\.properties()/\.fields()/g'       -e 's/\.fields()\.iterator()/.fields()/g'       "$file" > "$file.norm"
     mv "$file.norm" "$file"
   done
 }
