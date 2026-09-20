@@ -1,0 +1,22 @@
+# Tasks: comfy-java-sdk CLI / MCP parity
+
+- [ ] T1 Add OpenSpec proposal/design/tasks to all three branches.
+- [ ] T2 Fix ComfyCliExecutor probe timeout to use localProbeTimeoutSeconds.
+- [ ] T3 Add configurable bounded stdout/stderr capture and truncation metadata.
+- [ ] T4 Treat localExecutable as literal argv executable and keep UTF-8 decoding branch-compatible.
+- [ ] T5 Expand ComfyCli typed wrappers for setup/cloud/lifecycle/generate/run/jobs/templates/workflow/nodes/models/upload/download/skills/tracking.
+- [ ] T6 Add dynamic generate param support and validate per-call --where.
+- [ ] T7 Make ComfyClient.generateJson copy options instead of mutating caller input.
+- [ ] T8 Add ComfyJsonEnvelope and ComfyDoctorReport plus discoverJson/doctor helpers.
+- [ ] T9 Harden ComfyMcpClient lifecycle and duplicate-connect behavior.
+- [ ] T10 Drain comfy-mcp stderr with a bounded diagnostic buffer.
+- [ ] T11 Remove pending RPCs on timeout, completion and write failure.
+- [ ] T12 Reap MCP process on close and keep close idempotent.
+- [ ] T13 Add structured ComfyMcpContent while preserving raw result JSON.
+- [ ] T14 Add typed convenience methods for core first-party local comfy-mcp tools.
+- [ ] T15 Add/extend unit and fake-server E2E tests for every regression.
+- [ ] T16 Port identical business behavior to 1.0.x / 2.0.x / 3.0.x with only Jackson/JDK differences.
+- [ ] T17 Run full Maven verify on each branch.
+- [ ] T18 Run dependency/vulnerability audit and inspect CI.
+- [ ] T19 Production readiness review: process/thread/stream/Future cleanup, deadlocks, backpressure, OOM boundaries, command injection, sensitive logging, race conditions and resource leaks.
+- [ ] T20 Record branch SHAs, test totals, CI status and residual risks.
