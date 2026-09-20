@@ -2,209 +2,109 @@
  * Copyright (c) 2018-present, easy-4-java (https://github.com/easy-4-java).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 package io.github.easy4j.comfy.cli;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import io.github.easy4j.comfy.ComfyClientConfig;
 
 /**
- * Maps every Java call onto a real {@code comfy} command line invocation.
+ * Typed command mapper for the first-party {@code comfy} CLI.
  *
- * <p>Command surface mirrors the documented comfy CLI: setup, cloud auth,
- * ComfyUI lifecycle, the {@code generate} family, workflow/job/discovery
- * commands, skills management, and a raw escape hatch.</p>
- *
- * @author <a href="https://github.com/loong10k">Loong Wan</a>
- * @since 1.0.0
- * @see ComfyCliExecutor
- * @see ComfyCliResult
+ * <p>The surface models stable command families while retaining
+ * {@link #execute(String...)} as a forward-compatible escape hatch for beta
+ * flags and newly-added commands.</p>
  */
 public class ComfyCli {
 
     private final ComfyCliExecutor executor;
+    private final ComfyCliStreamExecutor streamExecutor;
     private final ComfyClientConfig config;
 
-    /**
-     * Creates a new command mapper.
-     *
-     * @param config  runtime configuration providing the defaults.
-     * @param executor subprocess executor the invocations are forwarded to.
-     */
     public ComfyCli(ComfyClientConfig config, ComfyCliExecutor executor) {
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.streamExecutor = new ComfyCliStreamExecutor(config);
     }
 
-    /**
-     * Returns the subprocess executor for advanced callers.
-     *
-     * @return the executor; never {@code null}.
-     */
-    public ComfyCliExecutor executor() {
-        return executor;
+    public ComfyCliExecutor executor() { return executor; }
+    public ComfyCliStreamExecutor streamExecutor() { return streamExecutor; }
+    public ComfyCliStreamSession stream(ComfyCliStreamListener listener, String... args) {
+        return streamExecutor.execute(listener, args);
+    }
+    public ComfyCliStreamSession runStream(RunOptions options, ComfyCliStreamListener listener) {
+        Objects.requireNonNull(options, "options");
+        return streamExecutor.execute(listener,
+                options.toArgs(config.getDefaultWhere()).toArray(new String[0]));
     }
 
-    // ============================================================
-    // basic info
-    // ============================================================
+    public ComfyCliResult version() { return executor.execute("--version"); }
+    public ComfyCliResult help() { return executor.execute("--help"); }
+    public ComfyCliResult helpJson() { return executor.execute("--help-json"); }
+    public ComfyCliResult installCompletion() { return executor.execute("--install-completion"); }
+    public ComfyCliResult discoverJson() { return executor.execute("--json", "discover"); }
+    public ComfyCliResult whichJson() { return executor.execute("--json", "which"); }
+    public ComfyCliResult envJson() { return executor.execute("--json", "env"); }
 
-    /**
-     * Runs {@code comfy --version}.
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult version() {
-        return executor.execute("--version");
+    public ComfyCliResult setup() { return executor.execute("setup"); }
+    public ComfyCliResult setupYes() { return executor.execute("setup", "-y"); }
+    public ComfyCliResult setup(SetupOptions options) {
+        Objects.requireNonNull(options, "options");
+        return executor.execute(options.toArgs().toArray(new String[0]));
     }
-
-    /**
-     * Runs {@code comfy --help}.
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult help() {
-        return executor.execute("--help");
+    public ComfyCliResult cloudLogin() { return executor.execute("cloud", "login"); }
+    public ComfyCliResult cloudWhoami() { return executor.execute("cloud", "whoami"); }
+    public ComfyCliResult cloudLogout() { return executor.execute("cloud", "logout"); }
+    public ComfyCliResult cloudSetBaseUrl(String url) {
+        return executor.execute("cloud", "set-base-url", requireNonBlank("url", url));
     }
-
-    /**
-     * Runs {@code comfy --install-completion} (shell completion).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult installCompletion() {
-        return executor.execute("--install-completion");
-    }
-
-    /**
-     * Runs {@code comfy --json discover} (agent discovery mode).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult discoverJson() {
-        return executor.execute("--json", "discover");
-    }
-
-    // ============================================================
-    // setup / cloud auth
-    // ============================================================
-
-    /**
-     * Runs {@code comfy setup} (interactive setup; the CLI prompts on its TTY).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult setup() {
-        return executor.execute("setup");
-    }
-
-    /**
-     * Runs {@code comfy setup -y} (non-interactive, for CI/scripts).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult setupYes() {
-        return executor.execute("setup", "-y");
-    }
-
-    /**
-     * Runs {@code comfy cloud login} (browser OAuth).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult cloudLogin() {
-        return executor.execute("cloud", "login");
-    }
-
-    /**
-     * Runs {@code comfy cloud whoami}.
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult cloudWhoami() {
-        return executor.execute("cloud", "whoami");
-    }
-
-    /**
-     * Runs {@code comfy set-default --where <where>} to persist routing.
-     *
-     * @param where {@code local} or {@code cloud}.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
     public ComfyCliResult setDefaultWhere(String where) {
-        requireWhere(where);
-        return executor.execute("set-default", "--where", where);
+        return executor.execute("set-default", "--where", requireWhere(where));
     }
 
-    // ============================================================
-    // local ComfyUI lifecycle
-    // ============================================================
-
-    /**
-     * Runs {@code comfy install <args...>} (workspace installation).
-     *
-     * @param args extra flags forwarded to the installer.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult install(String... args) {
-        return prefixed("install", args);
+    public ComfyCliResult install(String... args) { return prefixed("install", args); }
+    public ComfyCliResult launch(String... args) { return prefixed("launch", args); }
+    public ComfyCliResult launchBackground(String... extraArgs) {
+        List<String> args = new ArrayList<String>();
+        args.add("launch");
+        args.add("--background");
+        if (extraArgs != null && extraArgs.length > 0) {
+            args.add("--");
+            addNonNull(args, extraArgs);
+        }
+        return executor.execute(args.toArray(new String[0]));
     }
+    public ComfyCliResult stop() { return executor.execute("stop"); }
+    public ComfyCliResult update(String... args) { return prefixed("update", args); }
+    public ComfyCliResult which() { return executor.execute("which"); }
+    public ComfyCliResult env() { return executor.execute("env"); }
 
-    /**
-     * Runs {@code comfy launch <args...>} (start local ComfyUI).
-     *
-     * @param args extra flags forwarded to the launcher.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult launch(String... args) {
-        return prefixed("launch", args);
+
+    public ComfyCliResult outdated(String... args) { return prefixed("outdated", args); }
+    public ComfyCliResult logs(String... args) { return prefixed("logs", args); }
+    public ComfyCliResult systemStats(String... args) { return prefixed("system-stats", args); }
+    public ComfyCliResult free(String... args) { return prefixed("free", args); }
+    public ComfyCliResult runCli(String... args) { return prefixed("run-cli", args); }
+    public ComfyCliResult agentReview(String... args) { return prefixed("agent-review", args); }
+    public ComfyCliResult dependency(String... args) { return prefixed("dependency", args); }
+    public ComfyCliResult cloudStatus(String... args) { return prefixed2("cloud", "status", args); }
+    public ComfyCliResult cloudLogin(String... args) { return prefixed2("cloud", "login", args); }
+    public ComfyCliResult cloudSetKey(String key) {
+        return executor.execute("cloud", "set-key", "--key", requireNonBlank("key", key));
     }
-
-    /**
-     * Runs {@code comfy stop} (stop local ComfyUI).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult stop() {
-        return executor.execute("stop");
+    public ComfyCliResult cloudClearBaseUrl() {
+        return executor.execute("cloud", "set-base-url", "--clear");
     }
+    public ComfyCliResult setDefault(String... args) { return prefixed("set-default", args); }
 
-    /**
-     * Runs {@code comfy update <args...>}.
-     *
-     * @param args extra flags forwarded to the updater.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult update(String... args) {
-        return prefixed("update", args);
-    }
-
-    // ============================================================
-    // generate
-    // ============================================================
-
-    /**
-     * Runs {@code comfy generate <model>} with the given options.
-     *
-     * @param model   the generation model alias (e.g. {@code flux-pro}).
-     * @param options the generation options; must not be {@code null}.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
     public ComfyCliResult generate(String model, GenerateOptions options) {
         Objects.requireNonNull(model, "model");
+        requireNonBlank("model", model);
         Objects.requireNonNull(options, "options");
         List<String> args = new ArrayList<String>();
         args.add("generate");
@@ -213,212 +113,340 @@ public class ComfyCli {
         String where = options.where != null ? options.where : config.getDefaultWhere();
         if (where != null) {
             args.add("--where");
-            args.add(where);
+            args.add(requireWhere(where));
         }
         return executor.execute(args.toArray(new String[0]));
     }
-
-    /**
-     * Runs {@code comfy generate list} with optional filters.
-     *
-     * @param category optional {@code --category} filter; may be {@code null}.
-     * @param partner  optional {@code --partner} filter; may be {@code null}.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
     public ComfyCliResult generateList(String category, String partner) {
-        List<String> args = new ArrayList<String>();
-        args.add("generate");
-        args.add("list");
-        if (category != null) {
-            args.add("--category");
-            args.add(category);
-        }
-        if (partner != null) {
-            args.add("--partner");
-            args.add(partner);
-        }
+        return generateList(null, category, partner);
+    }
+    public ComfyCliResult generateList(String query, String category, String partner) {
+        List<String> args = words("generate", "list");
+        option(args, "--query", query);
+        option(args, "--category", category);
+        option(args, "--partner", partner);
         return executor.execute(args.toArray(new String[0]));
     }
-
-    /**
-     * Runs {@code comfy generate schema <model>} (one model's parameters).
-     *
-     * @param model the model alias to introspect.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
     public ComfyCliResult generateSchema(String model) {
-        return executor.execute("generate", "schema", model);
+        return executor.execute("generate", "schema", requireNonBlank("model", model));
     }
-
-    /**
-     * Runs {@code comfy generate upload <file>} (prints a signed URL).
-     *
-     * @param file the local file to upload.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
+    public ComfyCliResult generateRefresh() { return executor.execute("generate", "refresh"); }
     public ComfyCliResult generateUpload(String file) {
-        return executor.execute("generate", "upload", file);
+        return executor.execute("generate", "upload", requireNonBlank("file", file));
     }
-
-    /**
-     * Runs {@code comfy generate resume <model> <jobId>} with optional download.
-     *
-     * @param model    the model alias of the original job.
-     * @param jobId    the async job id.
-     * @param download optional {@code --download} target; may be {@code null}.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
     public ComfyCliResult generateResume(String model, String jobId, String download) {
-        List<String> args = new ArrayList<String>();
-        args.add("generate");
-        args.add("resume");
-        args.add(model);
-        args.add(jobId);
-        if (download != null) {
-            args.add("--download");
-            args.add(download);
-        }
+        List<String> args = words("generate", "resume",
+                requireNonBlank("model", model), requireNonBlank("jobId", jobId));
+        option(args, "--download", download);
         return executor.execute(args.toArray(new String[0]));
     }
 
-    // ============================================================
-    // workflows / jobs / discovery
-    // ============================================================
-
-    /**
-     * Runs {@code comfy run <args...>} (execute a workflow).
-     *
-     * @param args workflow invocation flags.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult run(String... args) {
-        return prefixed("run", args);
+    public ComfyCliResult run(String... args) { return prefixed("run", args); }
+    public ComfyCliResult run(RunOptions options) {
+        Objects.requireNonNull(options, "options");
+        return executor.execute(options.toArgs(config.getDefaultWhere()).toArray(new String[0]));
+    }
+    public ComfyCliResult jobs(String... args) { return prefixed("jobs", args); }
+    public ComfyCliResult jobsList() { return executor.execute("jobs", "ls"); }
+    public ComfyCliResult jobStatus(String promptId) {
+        return executor.execute("jobs", "status", requireNonBlank("promptId", promptId));
+    }
+    public ComfyCliResult jobsWait(String... promptIds) {
+        return prefixed2("jobs", "wait", requireValues("promptIds", promptIds));
+    }
+    public ComfyCliResult jobWatch(String promptId) {
+        return executor.execute("jobs", "watch", requireNonBlank("promptId", promptId));
+    }
+    public ComfyCliResult jobCancel(String promptId) {
+        return executor.execute("jobs", "cancel", requireNonBlank("promptId", promptId));
+    }
+    public ComfyCliResult validate(String... args) { return prefixed("validate", args); }
+    public ComfyCliResult validateWorkflow(String workflowPath) {
+        return executor.execute("validate", "--workflow", requireNonBlank("workflowPath", workflowPath));
     }
 
-    /**
-     * Runs {@code comfy jobs <args...>}.
-     *
-     * @param args job list/inspect flags.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult jobs(String... args) {
-        return prefixed("jobs", args);
+    public ComfyCliResult templates(String... args) { return prefixed("templates", args); }
+    public ComfyCliResult templatesList(String... filters) { return prefixed2("templates", "ls", filters); }
+    public ComfyCliResult templateShow(String name) {
+        return executor.execute("templates", "show", requireNonBlank("name", name));
+    }
+    public ComfyCliResult templateFetch(String name, String outPath) {
+        return executor.execute("templates", "fetch", requireNonBlank("name", name),
+                "--out", requireNonBlank("outPath", outPath));
     }
 
-    /**
-     * Runs {@code comfy validate <args...>}.
-     *
-     * @param args validation flags.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult validate(String... args) {
-        return prefixed("validate", args);
+    public ComfyCliResult workflow(String... args) { return prefixed("workflow", args); }
+    public ComfyCliResult workflowSlots(String path) {
+        return executor.execute("workflow", "slots", requireNonBlank("path", path));
+    }
+    public ComfyCliResult workflowNotes(String path) {
+        return executor.execute("workflow", "notes", requireNonBlank("path", path));
+    }
+    public ComfyCliResult workflowSetSlot(String path, boolean stdout, String... overrides) {
+        List<String> args = words("workflow", "set-slot", requireNonBlank("path", path));
+        addNonNull(args, requireValues("overrides", overrides));
+        if (stdout) args.add("--stdout");
+        return executor.execute(args.toArray(new String[0]));
+    }
+    public ComfyCliResult workflowVary(String path, String... overrides) {
+        List<String> args = words("workflow", "vary", requireNonBlank("path", path));
+        addNonNull(args, overrides);
+        return executor.execute(args.toArray(new String[0]));
+    }
+    public ComfyCliResult workflowList() { return executor.execute("workflow", "list"); }
+    public ComfyCliResult workflowGet(String name) {
+        return executor.execute("workflow", "get", requireNonBlank("name", name));
+    }
+    public ComfyCliResult workflowDelete(String name) {
+        return executor.execute("workflow", "delete", requireNonBlank("name", name));
+    }
+    public ComfyCliResult workflowCompose(String path) {
+        return executor.execute("workflow", "compose", requireNonBlank("path", path));
+    }
+    public ComfyCliResult workflowDecompose(String path) {
+        return executor.execute("workflow", "decompose", requireNonBlank("path", path));
     }
 
-    /**
-     * Runs {@code comfy workflow <args...>}.
-     *
-     * @param args workflow management flags.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult workflow(String... args) {
-        return prefixed("workflow", args);
+    public ComfyCliResult nodes(String... args) { return prefixed("nodes", args); }
+    public ComfyCliResult nodesSearch(String query) {
+        return executor.execute("nodes", "search", requireNonBlank("query", query));
+    }
+    public ComfyCliResult nodesShow(String name) {
+        return executor.execute("nodes", "show", requireNonBlank("name", name));
+    }
+    public ComfyCliResult nodesList(String... filters) { return prefixed2("nodes", "ls", filters); }
+    public ComfyCliResult nodeInstall(String... names) {
+        return prefixed2("node", "install", requireValues("names", names));
     }
 
-    /**
-     * Runs {@code comfy templates <args...>}.
-     *
-     * @param args template flags.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult templates(String... args) {
-        return prefixed("templates", args);
+    public ComfyCliResult models(String... args) { return prefixed("models", args); }
+    public ComfyCliResult model(String... args) { return prefixed("model", args); }
+    public ComfyCliResult modelsListFolders() { return executor.execute("model", "list-folders"); }
+    public ComfyCliResult modelsListFolder(String folder) {
+        return executor.execute("model", "list-folder", requireNonBlank("folder", folder));
+    }
+    public ComfyCliResult modelsSearch(String query) {
+        return executor.execute("model", "search", "--text", requireNonBlank("query", query));
+    }
+    public ComfyCliResult modelsShow(String name) {
+        return executor.execute("model", "show", requireNonBlank("name", name));
+    }
+    public ComfyCliResult modelDownload(String url, String... args) {
+        List<String> all = words("model", "download", requireNonBlank("url", url));
+        addNonNull(all, args);
+        return executor.execute(all.toArray(new String[0]));
     }
 
-    /**
-     * Runs {@code comfy nodes <args...>}.
-     *
-     * @param args node discovery flags.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult nodes(String... args) {
-        return prefixed("nodes", args);
+    public ComfyCliResult upload(String... paths) {
+        return prefixed("upload", requireValues("paths", paths));
+    }
+    public ComfyCliResult download(String promptId, String outDir, boolean urlOnly) {
+        List<String> args = words("download", requireNonBlank("promptId", promptId));
+        if (outDir != null) {
+            args.add("-o");
+            args.add(outDir);
+        }
+        if (urlOnly) args.add("--url-only");
+        return executor.execute(args.toArray(new String[0]));
     }
 
-    /**
-     * Runs {@code comfy models <args...>}.
-     *
-     * @param args model discovery flags.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult models(String... args) {
-        return prefixed("models", args);
+    /** Raw skills family escape hatch. */
+    // Current first-party CLI top-level domains. These family wrappers keep
+    // the SDK complete without freezing rapidly-evolving beta option schemas.
+    public ComfyCliResult runTemplate(String... args) { return prefixed("run-template", args); }
+    public ComfyCliResult preview(String... args) { return prefixed("preview", args); }
+    public ComfyCliResult knowledge(String... args) { return prefixed("knowledge", args); }
+    public ComfyCliResult manager(String... args) { return prefixed("manager", args); }
+    public ComfyCliResult prCache(String... args) { return prefixed("pr-cache", args); }
+    public ComfyCliResult codeSearch(String... args) { return prefixed("code-search", args); }
+    public ComfyCliResult tracking(String... args) { return prefixed("tracking", args); }
+    public ComfyCliResult auth(String... args) { return prefixed("auth", args); }
+    public ComfyCliResult build(String... args) { return prefixed("build", args); }
+    public ComfyCliResult deploy(String... args) { return prefixed("deploy", args); }
+    public ComfyCliResult project(String... args) { return prefixed("project", args); }
+    public ComfyCliResult assets(String... args) { return prefixed("assets", args); }
+    public ComfyCliResult agent(String... args) { return prefixed("agent", args); }
+    public ComfyCliResult feedback(String... args) { return prefixed("feedback", args); }
+    public ComfyCliResult standalone(String... args) { return prefixed("standalone", args); }
+
+    public ComfyCliResult skills(String... args) { return prefixed("skills", args); }
+    public ComfyCliResult skillsInstall() { return executor.execute("skills", "install"); }
+    public ComfyCliResult skillsInstall(String... args) { return prefixed2("skills", "install", args); }
+    public ComfyCliResult skillsUninstall(String... args) { return prefixed2("skills", "uninstall", args); }
+    public ComfyCliResult skillsList() { return executor.execute("skills", "list"); }
+    public ComfyCliResult skillsShow(String name) {
+        return executor.execute("skills", "show", requireNonBlank("name", name));
+    }
+    public ComfyCliResult skillsStatus() { return executor.execute("skills", "status"); }
+    public ComfyCliResult skillsStatus(String scope) {
+        return executor.execute("skills", "status", "--scope", requireSkillScope(scope));
+    }
+    public ComfyCliResult skillsValidate(String path) {
+        return executor.execute("skills", "validate", requireNonBlank("path", path));
     }
 
-    // ============================================================
-    // skills
-    // ============================================================
-
-    /**
-     * Runs {@code comfy skills install} (bundles agent skills).
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult skillsInstall() {
-        return executor.execute("skills", "install");
-    }
-
-    /**
-     * Runs {@code comfy skills list}.
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult skillsList() {
-        return executor.execute("skills", "list");
-    }
-
-    /**
-     * Runs {@code comfy skills status}.
-     *
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult skillsStatus() {
-        return executor.execute("skills", "status");
-    }
-
-    // ============================================================
-    // passthrough
-    // ============================================================
-
-    /**
-     * Runs an arbitrary {@code comfy} invocation; escape hatch for commands
-     * the SDK does not model yet.
-     *
-     * @param args full argument list after the executable.
-     * @return the raw CLI invocation result; never {@code null}.
-     */
-    public ComfyCliResult execute(String... args) {
-        return executor.execute(args);
-    }
+    public ComfyCliResult execute(String... args) { return executor.execute(args); }
 
     private ComfyCliResult prefixed(String prefix, String... args) {
-        String[] all = new String[args.length + 1];
-        all[0] = prefix;
-        System.arraycopy(args, 0, all, 1, args.length);
-        return executor.execute(all);
+        List<String> all = words(prefix);
+        addNonNull(all, args);
+        return executor.execute(all.toArray(new String[0]));
     }
 
-    private static void requireWhere(String where) {
+    private ComfyCliResult prefixed2(String first, String second, String... args) {
+        List<String> all = words(first, second);
+        addNonNull(all, args);
+        return executor.execute(all.toArray(new String[0]));
+    }
+
+    private static List<String> words(String... values) {
+        List<String> out = new ArrayList<String>();
+        addNonNull(out, values);
+        return out;
+    }
+
+    private static void addNonNull(List<String> out, String... values) {
+        if (values == null) return;
+        for (String value : values) if (value != null) out.add(value);
+    }
+
+    private static void option(List<String> args, String flag, String value) {
+        if (value != null && !value.isEmpty()) {
+            args.add(flag);
+            args.add(value);
+        }
+    }
+
+    private static String requireWhere(String where) {
         if (!"local".equals(where) && !"cloud".equals(where)) {
             throw new IllegalArgumentException("where must be 'local' or 'cloud': " + where);
         }
+        return where;
     }
 
-    /**
-     * Fluent options for one {@code comfy generate <model>} run.
-     */
-    public static class GenerateOptions {
+    private static String requireSkillScope(String scope) {
+        if (!"user".equals(scope) && !"project".equals(scope)) {
+            throw new IllegalArgumentException("scope must be 'user' or 'project': " + scope);
+        }
+        return scope;
+    }
 
+    private static String requireNonBlank(String name, String value) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException(name + " must not be blank");
+        }
+        if (value.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException(name + " must not contain NUL");
+        }
+        return value;
+    }
+
+    private static String[] requireValues(String name, String... values) {
+        if (values == null || values.length == 0) {
+            throw new IllegalArgumentException(name + " must not be empty");
+        }
+        for (String value : values) requireNonBlank(name, value);
+        return values;
+    }
+
+    public static class SetupOptions {
+        private String where;
+        private String projectDir;
+        private String apiKey;
+        private boolean nonInteractive;
+        private boolean skipSkills;
+        private boolean skipVerify;
+
+        public SetupOptions where(String value) { this.where = requireWhere(value); return this; }
+        public SetupOptions projectDir(String value) { this.projectDir = value; return this; }
+        public SetupOptions apiKey(String value) { this.apiKey = requireNonBlank("apiKey", value); return this; }
+        public SetupOptions nonInteractive(boolean value) { this.nonInteractive = value; return this; }
+        public SetupOptions skipSkills(boolean value) { this.skipSkills = value; return this; }
+        public SetupOptions skipVerify(boolean value) { this.skipVerify = value; return this; }
+
+        List<String> toArgs() {
+            List<String> args = words("setup");
+            option(args, "--where", where);
+            option(args, "--project-dir", projectDir);
+            option(args, "--api-key", apiKey);
+            if (nonInteractive) args.add("--non-interactive");
+            if (skipSkills) args.add("--skip-skills");
+            if (skipVerify) args.add("--skip-verify");
+            return args;
+        }
+    }
+
+    public static class RunOptions {
+        private String workflowPath;
+        private Boolean wait;
+        private String where;
+        private String prompt;
+        private final List<String> setOverrides = new ArrayList<String>();
+        private Boolean notify;
+        private boolean verbose;
+        private String host;
+        private Integer port;
+        private Integer timeoutSeconds;
+        private boolean printPrompt;
+        private String workflowId;
+        private boolean noWatch;
+        private boolean allowSpend;
+        private boolean json;
+        private boolean jsonStream;
+
+        public RunOptions(String workflowPath) {
+            this.workflowPath = requireNonBlank("workflowPath", workflowPath);
+        }
+        public RunOptions wait(boolean value) { this.wait = Boolean.valueOf(value); return this; }
+        public RunOptions prompt(String value) { this.prompt = value; return this; }
+        public RunOptions set(String value) { this.setOverrides.add(requireNonBlank("set", value)); return this; }
+        public RunOptions notify(boolean value) { this.notify = Boolean.valueOf(value); return this; }
+        public RunOptions verbose(boolean value) { this.verbose = value; return this; }
+        public RunOptions host(String value) { this.host = value; return this; }
+        public RunOptions port(int value) { this.port = Integer.valueOf(value); return this; }
+        public RunOptions timeoutSeconds(int value) { this.timeoutSeconds = Integer.valueOf(value); return this; }
+        public RunOptions printPrompt(boolean value) { this.printPrompt = value; return this; }
+        public RunOptions workflowId(String value) { this.workflowId = value; return this; }
+        public RunOptions noWatch(boolean value) { this.noWatch = value; return this; }
+        public RunOptions allowSpend(boolean value) { this.allowSpend = value; return this; }
+        public RunOptions where(String value) { this.where = value == null ? null : requireWhere(value); return this; }
+        public RunOptions json(boolean value) { this.json = value; return this; }
+        public RunOptions jsonStream(boolean value) { this.jsonStream = value; return this; }
+
+        List<String> toArgs(String defaultWhere) {
+            List<String> args = new ArrayList<String>();
+            if (json) args.add("--json");
+            if (jsonStream) args.add("--json-stream");
+            args.add("run");
+            if (workflowPath != null) {
+                args.add("--workflow");
+                args.add(workflowPath);
+            }
+            option(args, "--prompt", prompt);
+            for (String override : setOverrides) {
+                args.add("--set");
+                args.add(override);
+            }
+            if (Boolean.TRUE.equals(wait)) args.add("--wait");
+            if (notify != null) args.add(notify.booleanValue() ? "--notify" : "--no-notify");
+            if (verbose) args.add("--verbose");
+            option(args, "--host", host);
+            if (port != null) { args.add("--port"); args.add(String.valueOf(port)); }
+            if (timeoutSeconds != null) { args.add("--timeout"); args.add(String.valueOf(timeoutSeconds)); }
+            if (printPrompt) args.add("--print-prompt");
+            option(args, "--workflow-id", workflowId);
+            if (noWatch) args.add("--no-watch");
+            if (allowSpend) args.add("--allow-spend");
+            String route = where != null ? where : defaultWhere;
+            if (route != null) {
+                args.add("--where");
+                args.add(requireWhere(route));
+            }
+            return args;
+        }
+    }
+
+    public static class GenerateOptions {
         private String prompt;
         private Integer width;
         private Integer height;
@@ -428,123 +456,93 @@ public class ComfyCli {
         private String resolution;
         private Integer duration;
         private String aspectRatio;
+        private String ratio;
         private String renderingSpeed;
+        private Long seed;
+        private String model;
         private boolean async;
         private boolean json;
         private String where;
+        private Integer timeoutSeconds;
+        private final Map<String, String> params = new LinkedHashMap<String, String>();
 
-        /**
-         * Sets the {@code --prompt} flag.
-         *
-         * @param v the generation prompt.
-         * @return this builder for chaining.
-         */
+        public GenerateOptions() {}
+
+        public GenerateOptions(GenerateOptions source) {
+            Objects.requireNonNull(source, "source");
+            this.prompt = source.prompt;
+            this.width = source.width;
+            this.height = source.height;
+            this.download = source.download;
+            this.image = source.image;
+            this.mask = source.mask;
+            this.resolution = source.resolution;
+            this.duration = source.duration;
+            this.aspectRatio = source.aspectRatio;
+            this.ratio = source.ratio;
+            this.renderingSpeed = source.renderingSpeed;
+            this.seed = source.seed;
+            this.model = source.model;
+            this.async = source.async;
+            this.json = source.json;
+            this.where = source.where;
+            this.timeoutSeconds = source.timeoutSeconds;
+            this.params.putAll(source.params);
+        }
+
         public GenerateOptions prompt(String v) { this.prompt = v; return this; }
-        /**
-         * Sets the {@code --width} flag.
-         *
-         * @param v image width in pixels.
-         * @return this builder for chaining.
-         */
-        public GenerateOptions width(int v) { this.width = v; return this; }
-        /**
-         * Sets the {@code --height} flag.
-         *
-         * @param v image height in pixels.
-         * @return this builder for chaining.
-         */
-        public GenerateOptions height(int v) { this.height = v; return this; }
-        /**
-         * Sets the {@code --download} flag.
-         *
-         * @param v local target path for the generated asset.
-         * @return this builder for chaining.
-         */
+        public GenerateOptions width(int v) { this.width = Integer.valueOf(v); return this; }
+        public GenerateOptions height(int v) { this.height = Integer.valueOf(v); return this; }
         public GenerateOptions download(String v) { this.download = v; return this; }
-        /**
-         * Sets the {@code --image} flag (input image; alias {@code --input_image}).
-         *
-         * @param v input image path.
-         * @return this builder for chaining.
-         */
         public GenerateOptions image(String v) { this.image = v; return this; }
-        /**
-         * Sets the {@code --mask} flag.
-         *
-         * @param v mask image path.
-         * @return this builder for chaining.
-         */
         public GenerateOptions mask(String v) { this.mask = v; return this; }
-        /**
-         * Sets the {@code --resolution} flag (e.g. {@code 1080p}).
-         *
-         * @param v video resolution preset.
-         * @return this builder for chaining.
-         */
         public GenerateOptions resolution(String v) { this.resolution = v; return this; }
-        /**
-         * Sets the {@code --duration} flag (seconds, video models).
-         *
-         * @param v duration in seconds.
-         * @return this builder for chaining.
-         */
-        public GenerateOptions duration(int v) { this.duration = v; return this; }
-        /**
-         * Sets the {@code --aspect_ratio} flag (e.g. {@code 16:9}).
-         *
-         * @param v aspect ratio preset.
-         * @return this builder for chaining.
-         */
+        public GenerateOptions duration(int v) { this.duration = Integer.valueOf(v); return this; }
         public GenerateOptions aspectRatio(String v) { this.aspectRatio = v; return this; }
-        /**
-         * Sets the {@code --rendering_speed} flag.
-         *
-         * @param v rendering speed preset.
-         * @return this builder for chaining.
-         */
+        public GenerateOptions ratio(String v) { this.ratio = v; return this; }
         public GenerateOptions renderingSpeed(String v) { this.renderingSpeed = v; return this; }
-        /**
-         * Sets the {@code --async} flag (returns a job id immediately).
-         *
-         * @param v {@code true} for asynchronous submission.
-         * @return this builder for chaining.
-         */
+        public GenerateOptions seed(long v) { this.seed = Long.valueOf(v); return this; }
+        public GenerateOptions model(String v) { this.model = v; return this; }
         public GenerateOptions async(boolean v) { this.async = v; return this; }
-        /**
-         * Sets the {@code --json} flag (machine-readable output).
-         *
-         * @param v {@code true} to emit JSON.
-         * @return this builder for chaining.
-         */
         public GenerateOptions json(boolean v) { this.json = v; return this; }
-        /**
-         * Overrides the routing for this run ({@code --where}).
-         *
-         * @param v {@code local} or {@code cloud}.
-         * @return this builder for chaining.
-         */
-        public GenerateOptions where(String v) { this.where = v; return this; }
+        public GenerateOptions where(String v) { this.where = v == null ? null : requireWhere(v); return this; }
+        public GenerateOptions timeoutSeconds(int v) {
+            if (v <= 0) throw new IllegalArgumentException("timeoutSeconds must be > 0");
+            this.timeoutSeconds = Integer.valueOf(v);
+            return this;
+        }
 
-        /**
-         * Materialises the configured options into flags (without routing —
-         * the caller appends {@code --where} from config/override).
-         *
-         * @return the flag list.
-         */
+        public GenerateOptions param(String name, Object value) {
+            String n = requireNonBlank("param name", name);
+            if (!n.matches("[A-Za-z0-9_][A-Za-z0-9_-]*")) {
+                throw new IllegalArgumentException("invalid generate param name: " + name);
+            }
+            if (value == null) params.remove(n);
+            else params.put(n, String.valueOf(value));
+            return this;
+        }
+
         List<String> toArgs() {
             List<String> args = new ArrayList<String>();
-            if (prompt != null) { args.add("--prompt"); args.add(prompt); }
-            if (width != null) { args.add("--width"); args.add(String.valueOf(width)); }
-            if (height != null) { args.add("--height"); args.add(String.valueOf(height)); }
-            if (download != null) { args.add("--download"); args.add(download); }
-            if (image != null) { args.add("--image"); args.add(image); }
-            if (mask != null) { args.add("--mask"); args.add(mask); }
-            if (resolution != null) { args.add("--resolution"); args.add(resolution); }
-            if (duration != null) { args.add("--duration"); args.add(String.valueOf(duration)); }
-            if (aspectRatio != null) { args.add("--aspect_ratio"); args.add(aspectRatio); }
-            if (renderingSpeed != null) { args.add("--rendering_speed"); args.add(renderingSpeed); }
-            if (async) { args.add("--async"); }
-            if (json) { args.add("--json"); }
+            option(args, "--prompt", prompt);
+            if (width != null) option(args, "--width", String.valueOf(width));
+            if (height != null) option(args, "--height", String.valueOf(height));
+            option(args, "--download", download);
+            option(args, "--image", image);
+            option(args, "--mask", mask);
+            option(args, "--resolution", resolution);
+            if (duration != null) option(args, "--duration", String.valueOf(duration));
+            option(args, "--aspect_ratio", aspectRatio);
+            option(args, "--ratio", ratio);
+            option(args, "--rendering_speed", renderingSpeed);
+            if (seed != null) option(args, "--seed", String.valueOf(seed));
+            option(args, "--model", model);
+            if (timeoutSeconds != null) option(args, "--timeout", String.valueOf(timeoutSeconds));
+            for (Map.Entry<String, String> entry : params.entrySet()) {
+                option(args, "--" + entry.getKey(), entry.getValue());
+            }
+            if (async) args.add("--async");
+            if (json) args.add("--json");
             return args;
         }
     }
