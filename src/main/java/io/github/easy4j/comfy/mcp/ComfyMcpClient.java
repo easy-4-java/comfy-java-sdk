@@ -146,6 +146,9 @@ public class ComfyMcpClient implements AutoCloseable {
     }
 
     public List<ComfyMcpTool> listTools() {
+        if (state == State.CLOSED) {
+            throw new ComfyException("comfy mcp client is closed");
+        }
         ensureConnected();
         JsonNode result = await(request("tools/list", new LinkedHashMap<String, Object>(),
                 config.getReadTimeoutMillis(), "tools/list"), "tools/list");
