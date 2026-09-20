@@ -128,7 +128,7 @@ public final class ComfyCliStreamExecutor {
 
     private void readStdout(Process process, ComfyCliStreamListener listener, CappedBytes retained,
                             AtomicReference<Throwable> listenerFailure) {
-        readLines(process.getInputStream(), new LineConsumer() {
+        readLines(process.getInputStream(), effectiveLineLimit(config.getMaxStdoutBytes()), new LineConsumer() {
             @Override public void accept(String line) {
                 retained.append((line + "\n").getBytes(StandardCharsets.UTF_8));
                 if (line.trim().isEmpty()) return;
@@ -150,7 +150,7 @@ public final class ComfyCliStreamExecutor {
 
     private void readStderr(Process process, ComfyCliStreamListener listener, CappedBytes retained,
                             AtomicReference<Throwable> listenerFailure) {
-        readLines(process.getErrorStream(), new LineConsumer() {
+        readLines(process.getErrorStream(), effectiveLineLimit(config.getMaxStderrBytes()), new LineConsumer() {
             @Override public void accept(String line) {
                 retained.append((line + "\n").getBytes(StandardCharsets.UTF_8));
                 try {
@@ -163,7 +163,7 @@ public final class ComfyCliStreamExecutor {
         });
     }
 
-    private static void readLines(InputStream input, LineConsumer consumer) {
+    private static void readLines(InputStream input, int maxLineBytes, LineConsumer consumer) {
         ByteArrayOutputStream line = new ByteArrayOutputStream();
         try {
             int b;
@@ -172,7 +172,7 @@ public final class ComfyCliStreamExecutor {
                     consumer.accept(new String(line.toByteArray(), StandardCharsets.UTF_8));
                     line.reset();
                 } else if (b != '\r') {
-                    line.write(b);
+                    if (line.size() < maxLineBytes) line.write(b);
                 }
             }
             if (line.size() > 0) consumer.accept(new String(line.toByteArray(), StandardCharsets.UTF_8));
@@ -180,6 +180,10 @@ public final class ComfyCliStreamExecutor {
         } finally {
             try { input.close(); } catch (IOException ignored) { }
         }
+    }
+
+    private static int effectiveLineLimit(int configured) {
+        return configured > 0 ? configured : 16 * 1024 * 1024;
     }
 
     private void terminate(Process process) {
