@@ -74,6 +74,7 @@ public class ComfyCli {
     public ComfyCliResult env() { return executor.execute("env"); }
 
     public ComfyCliResult generate(String model, GenerateOptions options) {
+        Objects.requireNonNull(model, "model");
         requireNonBlank("model", model);
         Objects.requireNonNull(options, "options");
         List<String> args = new ArrayList<String>();
