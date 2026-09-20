@@ -5,7 +5,11 @@
  */
 package io.github.easy4j.comfy;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -13,8 +17,12 @@ import tools.jackson.databind.json.JsonMapper;
 import io.github.easy4j.comfy.cli.ComfyCli;
 import io.github.easy4j.comfy.cli.ComfyCliExecutor;
 import io.github.easy4j.comfy.cli.ComfyCliResult;
+import io.github.easy4j.comfy.model.ComfyCapabilityCatalog;
+import io.github.easy4j.comfy.model.ComfyCompatibilityReport;
 import io.github.easy4j.comfy.model.ComfyDoctorReport;
 import io.github.easy4j.comfy.model.ComfyJsonEnvelope;
+import io.github.easy4j.comfy.mcp.ComfyMcpClient;
+import io.github.easy4j.comfy.mcp.ComfyMcpTool;
 
 /**
  * High-level facade over the local first-party {@code comfy} CLI.
@@ -117,6 +125,39 @@ public class ComfyClient implements AutoCloseable {
                 + ", discover=" + discoveryHealthy;
         return new ComfyDoctorReport(available, versionHealthy, workspaceResolved,
                 environmentHealthy, discoveryHealthy, version, workspace, summary);
+    }
+
+
+    /** Returns the installed CLI's self-described capability snapshot. */
+    public ComfyCapabilityCatalog capabilities() {
+        ComfyJsonEnvelope envelope = discover();
+        return new ComfyCapabilityCatalog(envelope.getVersion(), envelope.getData());
+    }
+
+    /**
+     * Combines CLI doctor/discovery with the connected MCP server tool catalog.
+     * The method never includes environment values or credentials in the report.
+     */
+    public ComfyCompatibilityReport compatibility(ComfyMcpClient mcp) {
+        ComfyDoctorReport doctor = doctor();
+        ComfyCapabilityCatalog catalog = null;
+        try { catalog = capabilities(); } catch (RuntimeException ignored) { }
+
+        boolean connected = mcp != null && mcp.isConnected();
+        int toolCount = 0;
+        List<String> missing = new ArrayList<String>();
+        if (connected) {
+            List<ComfyMcpTool> tools = mcp.listTools();
+            toolCount = tools.size();
+            Set<String> names = new HashSet<String>();
+            for (ComfyMcpTool tool : tools) names.add(tool.getName());
+            for (String expected : ComfyMcpClient.firstPartyToolNames()) {
+                if (!names.contains(expected)) missing.add(expected);
+            }
+        } else {
+            missing.addAll(ComfyMcpClient.firstPartyToolNames());
+        }
+        return new ComfyCompatibilityReport(doctor, catalog, connected, toolCount, missing);
     }
 
     public ComfyCliResult cloudLogin() { return cli.cloudLogin(); }
