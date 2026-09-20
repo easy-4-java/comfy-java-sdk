@@ -112,6 +112,9 @@ public class ComfyCliExecutor {
             timedOut = true;
             terminate(process);
         } finally {
+            // Closing our stdin pipe first guarantees a writer cannot extend
+            // the call lifetime if the child/descendant stopped consuming it.
+            closeQuietly(process.getOutputStream());
             join(stdinWriter, config.getStreamDrainTimeoutMillis());
             drainReaders(process, stdoutReader, stderrReader);
         }
@@ -148,18 +151,20 @@ public class ComfyCliExecutor {
 
     private void drainReaders(Process process, Thread stdoutReader, Thread stderrReader) {
         long drainMs = config.getStreamDrainTimeoutMillis();
-        join(stdoutReader, drainMs);
-        join(stderrReader, drainMs);
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(drainMs);
+        joinUntil(stdoutReader, deadlineNanos);
+        joinUntil(stderrReader, deadlineNanos);
         if (stdoutReader.isAlive() || stderrReader.isAlive()) {
             // A descendant may still own inherited pipe write-ends. Closing
             // our read-ends prevents that descendant from extending the Java
             // call lifetime or retaining reader threads.
             closeQuietly(process.getInputStream());
             closeQuietly(process.getErrorStream());
-            join(stdoutReader, Math.min(250L, drainMs));
-            join(stderrReader, Math.min(250L, drainMs));
+            long closeDeadline = System.nanoTime()
+                    + TimeUnit.MILLISECONDS.toNanos(Math.min(250L, drainMs));
+            joinUntil(stdoutReader, closeDeadline);
+            joinUntil(stderrReader, closeDeadline);
         }
-        closeQuietly(process.getOutputStream());
     }
 
     private static void copy(InputStream input, OutputStream output) {
@@ -202,6 +207,15 @@ public class ComfyCliExecutor {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static void joinUntil(Thread thread, long deadlineNanos) {
+        if (thread == null || thread == Thread.currentThread() || !thread.isAlive()) return;
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) return;
+        long millis = TimeUnit.NANOSECONDS.toMillis(remainingNanos);
+        if (millis <= 0) millis = 1;
+        join(thread, millis);
     }
 
     private static void closeQuietly(java.io.Closeable closeable) {
